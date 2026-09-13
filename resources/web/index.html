@@ -649,7 +649,10 @@ html, body {
 /* CW Bar - RTTY decoder style (green terminal theme).
    Lives inside #scopeArea (position: relative) and pins to its bottom,
    so the bar tracks the 16:9 #radio container instead of spilling into
-   the letterboxed area on widescreen viewports. */
+   the letterboxed area on widescreen viewports. Capped at 65% of the
+   area: resizeCanvases() lays the spectrum + waterfall out in the strip
+   above the bar, so with the decoder open you can still see (and tap)
+   the waterfall to tune. */
 .cw-bar {
     position: absolute;
     bottom: 0;
@@ -658,7 +661,7 @@ html, body {
     z-index: 200;
     display: flex;
     flex-direction: column;
-    max-height: 100%;
+    max-height: 65%;
     overflow-y: auto;
 }
 .cw-bar.hidden { display: none; }
@@ -669,22 +672,22 @@ html, body {
 /* Mobile portrait: more compact CW bar */
 @media (orientation: portrait) and (max-width: 600px) {
     .cw-bar-header {
-        gap: 4px;
-        padding: 3px 4px;
+        gap: 3px;
+        padding: 3px;
         font-size: 11px;
-        flex-wrap: wrap; /* Allow wrapping to multiple rows */
+        flex-wrap: nowrap; /* one row: a wrapped ✕ costs a row the bar can't spare */
     }
+    .cw-log-btn .cw-wide { display: none; } /* "LOG QSO" reads "LOG" */
     .cw-label { display: none; } /* Hide "CW" label - obvious from context */
     .cw-speed-ctrl { gap: 2px; }
     /* Never swallow the whole scope area: the spectrum + waterfall live in
        the strip above the bar (resizeCanvases) so tap-to-tune keeps working. */
-    .cw-bar { max-height: 60%; }
     /* Touch targets: keep every header control >= 28px tall (WCAG floor is 24). */
     .cw-speed-btn { width: 28px; height: 28px; font-size: 15px; padding: 0; }
-    #cwSpeedInput { width: 36px; height: 28px; font-size: 12px; padding: 2px; }
+    #cwSpeedInput { width: 32px; height: 28px; font-size: 12px; padding: 2px; }
     .cw-wpm-label { display: none; } /* Hide "WPM" - obvious from context */
-    .cw-mode-btn { padding: 5px 7px; font-size: 10px; min-height: 28px; }
-    .cw-stop-btn, .cw-close-btn, .cw-edit-btn, .cw-log-btn { padding: 5px 7px; font-size: 10px; min-height: 28px; }
+    .cw-mode-btn { padding: 5px 5px; font-size: 10px; min-height: 28px; }
+    .cw-stop-btn, .cw-close-btn, .cw-edit-btn, .cw-log-btn { padding: 5px 5px; font-size: 10px; min-height: 28px; }
     .cw-display { font-size: 11px; padding: 3px 4px; min-height: 18px; }
     .cw-input-field { font-size: 11px; padding: 3px 4px; }
     .cw-macro-grid { gap: 3px; padding: 4px 6px; }
@@ -1052,6 +1055,8 @@ body.digi-open #bottomBar { grid-row: 5; }
     overflow: hidden;
 }
 .digi-decode-col + .digi-decode-col { border-left: 1px solid #024; }
+.digi-pane-tabs { display: none; }   /* phone only — see the portrait block */
+.digi-pane-tabs .wf-tab-unread:empty { display: none; }
 /* Right combined column: directed takes all flex space; msg section is fixed */
 .digi-right-col { flex: 1; }
 .digi-right-col .digi-directed-panel { flex: 1; min-height: 0; }
@@ -1991,6 +1996,21 @@ body.digi-open #bottomBar { grid-row: 5; }
     /* All Decodes panel: keep SNR, hide dt and Hz */
     #digiRxPanel .digi-decode-dt,
     #digiRxPanel .digi-decode-freq { display: none; }
+    /* Phone: two columns don't fit — the Directed pane collapsed to one
+       clipped line under the QSO message rows, and decodes squeezed into
+       half the width. Show one pane at a time, full width, picked by the
+       tab strip (DECODES / DIRECTED / MESSAGES). */
+    .digi-pane-tabs { display: flex; gap: 2px; padding: 3px 4px 0; background: #000820; border-bottom: 1px solid #024; flex-shrink: 0; }
+    .digi-pane-tabs .wf-tab { flex: 1; justify-content: center; min-height: 26px; font-size: 10px; }
+    .digi-decode-area { flex-direction: column; }
+    .digi-decode-col + .digi-decode-col { border-left: 0; }
+    .digi-decode-area .digi-col-header { display: none; }
+    .digi-decode-area[data-pane="rx"] .digi-right-col { display: none; }
+    .digi-decode-area:not([data-pane="rx"]) .digi-decode-col:not(.digi-right-col) { display: none; }
+    .digi-decode-area[data-pane="directed"] .digi-msg-cq-bar,
+    .digi-decode-area[data-pane="directed"] .digi-msg-rows { display: none; }
+    .digi-decode-area[data-pane="msgs"] .digi-directed-panel { display: none; }
+    .digi-decode-area[data-pane="msgs"] .digi-right-col .digi-msg-rows { max-height: none; flex: 1; }
     /* Status bar: wrap after clock, DX+buttons on row 2 */
     .digi-status-bar { flex-wrap: wrap; }
     .digi-mobile-break { flex-basis: 100%; height: 0; }
@@ -2271,7 +2291,7 @@ body.digi-open #bottomBar { grid-row: 5; }
                     <button class="cw-mode-btn wf-btn" data-mode="words">WRD</button>
                     <button class="cw-mode-btn wf-btn" data-mode="lines">LN</button>
                 </div>
-                <button id="cwLogBtn" class="cw-log-btn wf-btn">LOG QSO</button>
+                <button id="cwLogBtn" class="cw-log-btn wf-btn">LOG<span class="cw-wide"> QSO</span></button>
                 <button id="cwStopBtn" class="cw-stop-btn wf-btn danger">STOP</button>
                 <button id="cwCloseBtn" class="cw-close-btn wf-btn sq">✕</button>
             </div>
@@ -2323,7 +2343,13 @@ body.digi-open #bottomBar { grid-row: 5; }
             </div>
 
             <!-- Two-column decode area -->
-            <div class="digi-decode-area">
+            <div class="digi-decode-area" id="digiDecodeArea" data-pane="rx">
+                <!-- Phone-only pane switcher; desktop shows both columns -->
+                <div class="digi-pane-tabs">
+                    <button class="wf-tab active" data-pane="rx" onclick="digiSetPane('rx')">DECODES</button>
+                    <button class="wf-tab" data-pane="directed" onclick="digiSetPane('directed')">DIRECTED<span class="wf-tab-unread" id="digiDirectedUnread"></span></button>
+                    <button class="wf-tab" data-pane="msgs" onclick="digiSetPane('msgs')">MESSAGES</button>
+                </div>
                 <!-- Left: All Decodes -->
                 <div class="digi-decode-col">
                     <div class="digi-col-header">All Decodes</div>
@@ -6645,16 +6671,15 @@ function resizeCanvases() {
     var areaRect = area.getBoundingClientRect();
     if (areaRect.width <= 0 || areaRect.height <= 0) return;
 
-    // Portrait phones: the CW bar is bottom-anchored over the scope area, so
-    // lay the spectrum + waterfall out in the strip above it — otherwise the
+    // The CW bar is bottom-anchored over the scope area, so lay the
+    // spectrum + waterfall out in the strip above it — otherwise the
     // waterfall is buried under the decoder and you can't tap-tune while
-    // decoding. The bar caps itself at 60% of the area (CSS), so the scope
-    // always keeps at least the top 40%.
+    // decoding. The bar caps itself at 65% of the area (CSS), so the scope
+    // always keeps at least the top 35%.
     var availH = areaRect.height;
     var cwBar = document.getElementById('cwBar');
-    if (cwBar && !cwBar.classList.contains('hidden') &&
-        window.matchMedia('(orientation: portrait) and (max-width: 600px)').matches) {
-        availH = Math.max(areaRect.height * 0.4, areaRect.height - cwBar.getBoundingClientRect().height);
+    if (cwBar && !cwBar.classList.contains('hidden')) {
+        availH = Math.max(areaRect.height * 0.35, areaRect.height - cwBar.getBoundingClientRect().height);
     }
     var spectH = Math.round(availH * 0.35);
     var wfH = Math.round(availH * 0.65);
@@ -8059,6 +8084,35 @@ function getCurrentDigiBand() {
     }
     return (bestDist < 500000) ? best : null;
 }
+
+// Phone pane switcher for the FT8 decode area (the tab strip is hidden on
+// desktop, where both columns fit side by side).
+function digiSetPane(pane) {
+    var area = document.getElementById('digiDecodeArea');
+    if (!area) return;
+    area.dataset.pane = pane;
+    area.querySelectorAll('.digi-pane-tabs .wf-tab').forEach(function (b) {
+        b.classList.toggle('active', b.dataset.pane === pane);
+    });
+    if (pane === 'directed') {
+        var u = document.getElementById('digiDirectedUnread');
+        if (u) u.textContent = '';
+    }
+}
+// Badge the DIRECTED tab when a row lands there while another pane is up.
+(function () {
+    var panel = document.getElementById('digiDirectedPanel');
+    var area = document.getElementById('digiDecodeArea');
+    if (!panel || !area || !window.MutationObserver) return;
+    new MutationObserver(function (muts) {
+        if (area.dataset.pane === 'directed') return;
+        var added = 0;
+        muts.forEach(function (m) { added += m.addedNodes.length; });
+        if (!added) return;
+        var u = document.getElementById('digiDirectedUnread');
+        if (u) u.textContent = String((parseInt(u.textContent, 10) || 0) + added);
+    }).observe(panel, { childList: true });
+})();
 
 function toggleDigiBar() {
     digiBarVisible = !digiBarVisible;

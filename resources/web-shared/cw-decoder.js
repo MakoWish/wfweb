@@ -214,21 +214,23 @@
         const style = document.createElement('style');
         style.id = 'cwDecoderStyles';
         style.textContent = `
-            #cwDecoderSection { margin: 8px 0; border-bottom: 1px solid #0a0; padding-bottom: 8px; }
+            #cwDecoderSection { margin: 6px 0; border-bottom: 1px solid #0a0; padding-bottom: 6px; }
             #cwDecoderToggle { }
             #cwDecoderToggle:hover { background: #0a0 !important; color: #000 !important; }
             #cwDecoderToggle.active { background: #0a0 !important; color: #000 !important; }
             #cwDecoderToggle.loading { background: #1a1a00 !important; border-color: #aa0 !important; color: #aa0 !important; }
             @media (orientation: portrait) and (max-width: 600px) {
-                #cwDecoderToggle { font-size: 10px !important; padding: 6px 6px !important; margin-left: 2px !important; min-height: 28px; letter-spacing: 0; }
-                /* shorter tone scope so the bar leaves room for the RF waterfall above it */
-                .cw-scope-container, #cwScopeCanvas { height: 56px; }
+                #cwDecoderToggle { font-size: 10px !important; padding: 6px 5px !important; margin-left: 0 !important; min-height: 28px; letter-spacing: 0; }
+                /* The tone spectrogram is a luxury on a phone: the RF
+                   waterfall above shows the same signal, and the whole bar
+                   must fit under 65% of the scope area. Keep the text line. */
+                .cw-scope-container { display: none; }
             }
-            .cw-scope-container { position: relative; width: 100%; height: 100px; }
-            #cwScopeCanvas { display: block; background: #000; width: 100%; height: 100px; border-radius: 4px; border: 1px solid #0a0; }
+            .cw-scope-container { position: relative; width: 100%; height: 48px; }
+            #cwScopeCanvas { display: block; background: #000; width: 100%; height: 48px; border-radius: 4px; border: 1px solid #0a0; }
             #cwFilterBand { position: absolute; left: 0; right: 0; pointer-events: none; border-top: 1px solid #f00; border-bottom: 1px solid #f00; display: none; }
             #cwFilterBand.active { display: block; }
-            #cwDecoderText { width: 100%; font-size: 20px; background: #000; border-radius: 4px; border: 1px solid #0a0; height: 32px; margin-top: 8px; color: #0f0; overflow-x: scroll; overflow-y: hidden; scrollbar-width: none; -ms-overflow-style: none; box-sizing: border-box; font-family: 'Courier New', monospace; line-height: 32px; padding: 0 8px; }
+            #cwDecoderText { width: 100%; font-size: 20px; background: #000; border-radius: 4px; border: 1px solid #0a0; height: 32px; margin-top: 6px; color: #0f0; overflow-x: scroll; overflow-y: hidden; scrollbar-width: none; -ms-overflow-style: none; box-sizing: border-box; font-family: 'Courier New', monospace; line-height: 32px; padding: 0 8px; }
             #cwDecoderText::-webkit-scrollbar { display: none; }
             #cwDecoderTextInner { white-space: pre; display: inline; }
             .cw-decoded-call { color: #ff0; cursor: pointer; text-decoration: underline; }
