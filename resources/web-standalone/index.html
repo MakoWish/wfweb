@@ -3203,6 +3203,7 @@ var freqInputBuf = '';
 // DIGI (FT8/FT4) state
 var digiBarVisible = false;
 var cwBarSuspended = false;   // true while cw bar is hidden due to an overlay being open
+var cwDecoderAutoStartPending = false; // CW entered before the audio path was up
 var digiBarSuspended = false; // true while digi bar is hidden due to an overlay being open
 var digiMode = 'FT8';
 var digiRxEnabled = true;
@@ -3478,6 +3479,7 @@ function handleMessage(msg) {
         case 'audioStatus':
             if (msg.enabled) { audioEnabled = true; audioSampleRate = msg.sampleRate || audioSampleRate; }
             else { audioEnabled = false; }
+            if (audioEnabled && cwDecoderAutoStartPending) startCwDecoder(20);
             renderBottomBar();
             updateWarningVisibility();
             if (currentPanel === 'audiomiс') renderAudioMicOverlay();
@@ -3810,9 +3812,28 @@ function autoOpenCwBarOnModeEntry() {
             btn.classList.toggle('active', btn.dataset.mode === cwMode);
         });
     }
+    startCwDecoder(20);
+}
+
+// Turn the decoder on, waiting for whatever isn't ready yet. Landing
+// straight in CW (rig already in CW at page load, or ?m=CW) reaches
+// autoOpenCwBarOnModeEntry before the RX audio path is up — on the server
+// build audio only starts from the splash gesture — and possibly before
+// cw-decoder.js has injected its DECODE button. Retry for the button,
+// and remember the intent across the audio wait.
+function startCwDecoder(tries) {
+    if (currentMode !== 'CW' && currentMode !== 'CW-R') {
+        cwDecoderAutoStartPending = false;
+        return;
+    }
+    if (!audioEnabled) { cwDecoderAutoStartPending = true; return; }
     var decodeBtn = document.getElementById('cwDecoderToggle');
-    if (decodeBtn && audioEnabled
-        && !decodeBtn.classList.contains('active')
+    if (!decodeBtn) {
+        if (tries > 0) setTimeout(function() { startCwDecoder(tries - 1); }, 250);
+        return;
+    }
+    cwDecoderAutoStartPending = false;
+    if (!decodeBtn.classList.contains('active')
         && !decodeBtn.classList.contains('loading')) {
         decodeBtn.click();
     }
