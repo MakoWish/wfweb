@@ -474,6 +474,18 @@ void webServer::init(quint16 httpPort, quint16 wsPort)
     }
 }
 
+// Icom documents the IC-7600's power-on command (18 01) as accepted only at
+// the [REMOTE] jack, and the rig leaves its USB interface unpowered in
+// standby.  A wfweb session on the USB port can therefore switch that radio
+// off but can never switch it back on — the user has to walk over and press
+// POWER (issue #104).  Wired through [REMOTE] instead, power control works
+// normally, and nothing on the wire tells the two cable paths apart, so this
+// is a warning for the confirm dialog rather than a lost capability.
+static bool powerOnNeedsRemoteJack(const rigCapabilities *caps)
+{
+    return caps != Q_NULLPTR && caps->modelName == QLatin1String("IC-7600");
+}
+
 void webServer::receiveRigCaps(rigCapabilities *caps)
 {
     rigCaps = caps;
@@ -492,8 +504,15 @@ void webServer::receiveRigCaps(rigCapabilities *caps)
         // something to tune, so the TUNE tile and the FUNC TUNER button
         // follow that capability instead of appearing on every rig.
         obj["hasTuner"] = rigCaps->commands.contains(funcTunerStatus);
+        obj["hasPowerControl"] = rigCaps->commands.contains(funcPowerControl);
+        obj["powerOnNeedsRemoteJack"] = powerOnNeedsRemoteJack(rigCaps);
         addToneCaps(obj);
         addBandCaps(obj);
+        addTxMeterCaps(obj);
+        // A new rig may not have the meter the previous selection named.
+        if (txMeterFunc != funcNone && !rigCaps->commands.contains(txMeterFunc))
+            txMeterFunc = funcNone;
+        applyTxMeterPoll();
 
         QJsonArray modes;
         for (const modeInfo &mi : rigCaps->modes) {
@@ -1157,6 +1176,7 @@ void webServer::handleRestRequest(QTcpSocket *socket, const QString &method,
         if (swr.value.isValid()) resp["swrMeter"] = swr.value.toDouble();
         cacheItem alc = queue->getCache(funcALCMeter, 0);
         if (alc.value.isValid()) resp["alcMeter"] = alc.value.toDouble();
+        addTxMeterReadings(resp);
         sendRestResponse(socket, 200, resp);
         return;
     }
@@ -1930,6 +1950,18 @@ void webServer::handleCommand(QWebSocket *client, const QJsonObject &cmd)
             if (queue) queue->add(priorityImmediate, funcTunerStatus, false, 0);
         });
     }
+    else if (type == "setTxMeter") {
+        // Which reading the browser's second TX bar is showing. Only Comp/Vd/Id
+        // need a poll of their own — SWR and ALC are already polled.
+        QString kind = cmd["value"].toString();
+        funcs f = (kind == "comp") ? funcCompMeter
+                : (kind == "vd")   ? funcVdMeter
+                : (kind == "id")   ? funcIdMeter : funcNone;
+        if (f != txMeterFunc) {
+            txMeterFunc = f;
+            applyTxMeterPoll();
+        }
+    }
     else if (type == "setAutoNotch") {
         bool on = cmd["value"].toBool();
         queue->addUnique(priorityImmediate, queueItem(funcAutoNotch, QVariant::fromValue<uchar>(on ? 1 : 0), false, 0));
@@ -2052,6 +2084,22 @@ void webServer::handleCommand(QWebSocket *client, const QJsonObject &cmd)
             centerSpanData span = rigCaps->scopeCenterSpans.at(idx);
             queue->addUnique(priorityImmediate, queueItem(funcScopeSpan, QVariant::fromValue<centerSpanData>(span), false, 0));
         }
+    }
+    else if (type == "setScopeRef") {
+        // Scope reference level in tenths of a dB (-200..+200). The browser
+        // renders the REF shift itself (the streamed wave data doesn't move
+        // with it); this mirrors the value to the rig so its screen matches.
+        // The Icom encoder takes an int in tenths: 25 -> BCD 02 50 -> +2.5 dB.
+        int tenths = qBound(-200, cmd["value"].toInt(), 200);
+        if (rigCaps && rigCaps->commands.contains(funcScopeRef))
+            queue->addUnique(priorityImmediate, queueItem(funcScopeRef, QVariant::fromValue<int>(tenths), false, 0));
+    }
+    else if (type == "setScopeSpeed") {
+        // Scope sweep speed (0x27 0x1A): 0 = FAST, 1 = MID, 2 = SLOW. The
+        // browser scrolls its own waterfall at the matching rows-per-sweep.
+        uchar speed = static_cast<uchar>(qBound(0, cmd["value"].toInt(), 2));
+        if (rigCaps && rigCaps->commands.contains(funcScopeSpeed))
+            queue->addUnique(priorityImmediate, queueItem(funcScopeSpeed, QVariant::fromValue<uchar>(speed), false, 0));
     }
     else if (type == "enableAudio") {
         bool enable = cmd["value"].toBool();
@@ -3065,6 +3113,8 @@ QJsonObject webServer::buildInfoJson() const
 {
     QJsonObject info;
     info["version"] = QString(WFWEB_VERSION);
+    // Instance tag from --name; empty means "show the rig model".
+    info["name"] = instanceName_;
 
     // freedvModes depends only on compile-time flags, not on the rig,
     // so it must be sent regardless of whether rigCaps is populated yet.
@@ -3098,6 +3148,7 @@ QJsonObject webServer::buildInfoJson() const
         info["txAudioAvailable"] = txAudioConfigured;
         info["hasFilterSettings"] = rigCaps->commands.contains(funcPBTInner);
         info["hasPowerControl"] = rigCaps->commands.contains(funcPowerControl);
+        info["powerOnNeedsRemoteJack"] = powerOnNeedsRemoteJack(rigCaps);
         info["hasMainSub"] = rigCaps->hasCommand29;
         // Repeater duplex: only the rigs whose .rig declares the offset
         // command (IC-705/9700/905/785x) can shift the TX frequency, so the
@@ -3110,6 +3161,7 @@ QJsonObject webServer::buildInfoJson() const
         info["hasTuner"] = rigCaps->commands.contains(funcTunerStatus) && !tunerRejected;
         addToneCaps(info);
         addBandCaps(info);
+        addTxMeterCaps(info);
         if (!rigCaps->scopeCenterSpans.empty()) {
             QJsonArray spans;
             for (const centerSpanData &s : rigCaps->scopeCenterSpans) {
@@ -3311,6 +3363,9 @@ QJsonObject webServer::buildStatusJson()
     if (alc.value.isValid()) {
         status["alcMeter"] = alc.value.toDouble();
     }
+
+    // Switchable second TX bar (Comp / Vd / Id) — only one is ever polled.
+    addTxMeterReadings(status);
 
     // TX status
     cacheItem txStatus = queue->getCache(funcTransceiverStatus, 0);
@@ -3625,6 +3680,15 @@ void webServer::receiveCache(cacheItem item)
     case funcALCMeter:
         update["alcMeter"] = item.value.toDouble();
         break;
+    case funcCompMeter:
+        update["compMeter"] = item.value.toDouble();
+        break;
+    case funcVdMeter:
+        update["vdMeter"] = item.value.toDouble();
+        break;
+    case funcIdMeter:
+        update["idMeter"] = item.value.toDouble();
+        break;
     case funcTransceiverStatus:
         update["transmitting"] = item.value.toBool();
         if (freedvReporter) freedvReporter->updateTx(freedvModeName, item.value.toBool());
@@ -3858,6 +3922,8 @@ void webServer::sendPeriodicStatus()
     if (alc.value.isValid()) {
         status["alcMeter"] = alc.value.toDouble();
     }
+
+    addTxMeterReadings(status);
 
     cacheItem txStatus = queue->getCache(funcTransceiverStatus, 0);
     if (txStatus.value.isValid()) {
@@ -4232,6 +4298,78 @@ void webServer::addBandCaps(QJsonObject &o) const
         bands.append(bo);
     }
     o["bands"] = bands;
+}
+
+// The bottom bar of the browser's meter is switchable: SWR (default), ALC,
+// COMP, Vd and Id, the same set the rig's own multi-function meter offers.
+// Send one descriptor per meter the rig can actually drive, so the browser
+// never offers a reading this radio cannot produce.
+//
+// Each descriptor carries the rig's own calibration table ([rigVal, actual]
+// pairs straight out of the .rig file) plus the actual value where the red
+// zone starts. That is exactly what the rig prints on its meter face: the
+// bar is linear in the raw register value, and the table says which reading
+// each printed tick corresponds to. A meter with no table would read out raw
+// 0..255 counts, so it is left out rather than shown lying.
+void webServer::addTxMeterCaps(QJsonObject &o) const
+{
+    if (!rigCaps) return;
+    struct meterDesc { const char *kind; funcs func; meter_t meter; };
+    static const meterDesc meters[] = {
+        { "swr",  funcSWRMeter,  meterSWR     },
+        { "alc",  funcALCMeter,  meterALC     },
+        { "comp", funcCompMeter, meterComp    },
+        { "vd",   funcVdMeter,   meterVoltage },
+        { "id",   funcIdMeter,   meterCurrent },
+    };
+    QJsonArray list;
+    for (const meterDesc &d : meters) {
+        if (!rigCaps->commands.contains(d.func)) continue;
+        const QMap<int, double> &cal = rigCaps->meters[d.meter];
+        if (cal.isEmpty()) continue;
+        QJsonArray points;
+        for (auto it = cal.constBegin(); it != cal.constEnd(); ++it) {
+            QJsonArray pt;
+            pt.append(it.key());
+            pt.append(it.value());
+            points.append(pt);
+        }
+        QJsonObject m;
+        m["kind"] = d.kind;
+        m["cal"] = points;
+        // meterLines[] is only written for a cal point flagged RedLine.
+        if (rigCaps->meterLines[d.meter] != 0.0)
+            m["red"] = rigCaps->meterLines[d.meter];
+        list.append(m);
+    }
+    o["txMeters"] = list;
+}
+
+// The cached reading of whichever optional meter is currently polled. Only
+// one of the three is ever in the queue, so at most one key appears.
+void webServer::addTxMeterReadings(QJsonObject &o) const
+{
+    const char *key = (txMeterFunc == funcCompMeter) ? "compMeter"
+                    : (txMeterFunc == funcVdMeter)   ? "vdMeter"
+                    : (txMeterFunc == funcIdMeter)   ? "idMeter" : nullptr;
+    if (!queue || !key) return;
+    cacheItem c = queue->getCache(txMeterFunc, 0);
+    if (c.value.isValid()) o[key] = c.value.toDouble();
+}
+
+// Poll whichever of Comp/Vd/Id the browser's second TX bar is showing, and
+// drop the poll for the other two. SWR/ALC/power are polled unconditionally
+// elsewhere, so selecting them just clears the extra poll.
+void webServer::applyTxMeterPoll()
+{
+    if (!queue || !rigCaps) return;
+    static const funcs optional[] = { funcCompMeter, funcVdMeter, funcIdMeter };
+    for (funcs f : optional) {
+        if (f == txMeterFunc) continue;
+        queue->del(f, 0);
+    }
+    if (txMeterFunc != funcNone && rigCaps->commands.contains(txMeterFunc))
+        queue->addUnique(priorityHighest, queueItem(txMeterFunc, true, 0));
 }
 
 // What the browser needs to draw the TONE panel: which of the three tone kinds
@@ -5522,6 +5660,11 @@ void webServer::onUsbAudioOutputStateChanged(QAudio::State state)
 void webServer::setSettingsFile(const QString &path)
 {
     packetSettingsFile_ = path;
+}
+
+void webServer::setInstanceName(const QString &name)
+{
+    instanceName_ = name;
 }
 
 static QSettings *packetSettingsFor(const QString &file)

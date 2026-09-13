@@ -105,6 +105,15 @@ html, body {
 }
 .flex-space { flex: 1; }
 #clock { color: #888; font-family: var(--font-mono); font-size: 11px; }
+/* Rig model (or the server's --name tag) so several wfweb tabs/instances
+   can be told apart at a glance. Empty until the rig is identified. */
+#rigTag {
+    color: var(--text-faint); font-family: var(--font-mono);
+    font-size: 11px; font-weight: bold; letter-spacing: 0.5px;
+    white-space: nowrap; max-width: 160px;
+    overflow: hidden; text-overflow: ellipsis;
+}
+#rigTag:empty { display: none; }
 .qso-log-btn {
     padding: 2px 8px;
     background: #00161a;
@@ -132,7 +141,10 @@ html, body {
     background: transparent;
     color: #0a0;
     cursor: pointer;
-    display: flex; align-items: center; justify-content: center;
+    /* Hidden until the rig reports it declares the power control command;
+       updateHasPowerControl() switches this to flex.  Rigs without it would
+       get a button whose Power Off silently does nothing. */
+    display: none; align-items: center; justify-content: center;
     font-size: 13px;
     flex-shrink: 0;
     padding: 0;
@@ -214,6 +226,16 @@ html, body {
     font-size: 18px;
     margin-bottom: 24px;
 }
+#powerConfirm .dialog-note {
+    display: none;
+    max-width: 360px;
+    margin: -12px auto 22px;
+    font-size: 13px;
+    line-height: 1.45;
+    color: #d8a23a;
+    text-align: left;
+}
+#powerConfirm .dialog-note.visible { display: block; }
 #powerConfirm .dialog-btns {
     display: flex;
     gap: 16px;
@@ -249,6 +271,10 @@ html, body {
 }
 #meterCanvas {
     width: 100%; height: 64px;
+    /* Tapping the meter cycles the bottom row through the readings this
+       radio can produce, so it must not select text on a double-tap. */
+    -webkit-user-select: none; user-select: none;
+    -webkit-tap-highlight-color: transparent;
 }
 #freqSection {
     flex: 1;
@@ -363,7 +389,7 @@ html, body {
 }
 #spectrumCanvas {
     top: 0; height: 35%;
-    background: #050510;
+    background: #05070c;
 }
 #waterfallCanvas {
     top: 35%; height: 65%;
@@ -550,15 +576,43 @@ html, body {
 }
 
 /* SPAN overlay */
+/* SPAN / REF is a bottom sheet, not a full cover: both settings change what
+   the scope shows, so the spectrum and the newest waterfall rows stay in
+   view above it while you pick. */
 #spanOverlay.visible {
     flex-direction: column;
-    padding: 4px 12px;
+    top: auto; bottom: 0;
+    padding: 5px 8px 6px;
+    gap: 4px;
+    background: rgba(8,8,8,0.92);
+    border-top: 1px solid #2a2a2a;
 }
-#spanOverlay .overlay-grid {
+/* One setting per line: a narrow label column, then that line's keys
+   stretched across the full width (auto-fit: two keys take half each,
+   eight take an eighth; on a phone the span keys wrap to two lines). */
+.scope-row {
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 6px; padding: 4px 0;
-    flex: 1; align-content: center;
+    grid-template-columns: 50px 1fr;
+    align-items: center;
+    gap: 6px;
+}
+.scope-row-label {
+    font-size: 10px; letter-spacing: 1.5px; color: #888;
+    text-transform: uppercase;
+}
+.scope-row .overlay-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(64px, 1fr));
+    gap: 4px; padding: 0;
+    flex: 0 0 auto;
+}
+.scope-row-value {
+    font-size: 11px; color: #0cc; font-family: var(--font-mono);
+    text-align: center; white-space: nowrap;
+}
+#spanOverlay .ov-btn { min-height: 30px; font-size: 12px; }
+@media (max-width: 600px) {
+    #spanOverlay .ov-btn { min-height: 28px; font-size: 11px; }
 }
 
 /* Overlay button */
@@ -595,7 +649,10 @@ html, body {
 /* CW Bar - RTTY decoder style (green terminal theme).
    Lives inside #scopeArea (position: relative) and pins to its bottom,
    so the bar tracks the 16:9 #radio container instead of spilling into
-   the letterboxed area on widescreen viewports. */
+   the letterboxed area on widescreen viewports. Capped at 65% of the
+   area: resizeCanvases() lays the spectrum + waterfall out in the strip
+   above the bar, so with the decoder open you can still see (and tap)
+   the waterfall to tune. */
 .cw-bar {
     position: absolute;
     bottom: 0;
@@ -604,7 +661,7 @@ html, body {
     z-index: 200;
     display: flex;
     flex-direction: column;
-    max-height: 100%;
+    max-height: 65%;
     overflow-y: auto;
 }
 .cw-bar.hidden { display: none; }
@@ -615,25 +672,29 @@ html, body {
 /* Mobile portrait: more compact CW bar */
 @media (orientation: portrait) and (max-width: 600px) {
     .cw-bar-header {
-        gap: 4px;
-        padding: 3px 4px;
+        gap: 3px;
+        padding: 3px;
         font-size: 11px;
-        flex-wrap: wrap; /* Allow wrapping to multiple rows */
+        flex-wrap: nowrap; /* one row: a wrapped ✕ costs a row the bar can't spare */
     }
+    .cw-log-btn .cw-wide { display: none; } /* "LOG QSO" reads "LOG" */
     .cw-label { display: none; } /* Hide "CW" label - obvious from context */
     .cw-speed-ctrl { gap: 2px; }
-    .cw-speed-btn { width: 22px; height: 22px; font-size: 14px; padding: 0; }
-    #cwSpeedInput { width: 32px; height: 22px; font-size: 11px; padding: 2px; }
+    /* Never swallow the whole scope area: the spectrum + waterfall live in
+       the strip above the bar (resizeCanvases) so tap-to-tune keeps working. */
+    /* Touch targets: keep every header control >= 28px tall (WCAG floor is 24). */
+    .cw-speed-btn { width: 28px; height: 28px; font-size: 15px; padding: 0; }
+    #cwSpeedInput { width: 32px; height: 28px; font-size: 12px; padding: 2px; }
     .cw-wpm-label { display: none; } /* Hide "WPM" - obvious from context */
-    .cw-mode-btn { padding: 2px 6px; font-size: 10px; }
-    .cw-stop-btn, .cw-close-btn, .cw-edit-btn, .cw-log-btn { padding: 2px 6px; font-size: 10px; }
+    .cw-mode-btn { padding: 5px 5px; font-size: 10px; min-height: 28px; }
+    .cw-stop-btn, .cw-close-btn, .cw-edit-btn, .cw-log-btn { padding: 5px 5px; font-size: 10px; min-height: 28px; }
     .cw-display { font-size: 11px; padding: 3px 4px; min-height: 18px; }
     .cw-input-field { font-size: 11px; padding: 3px 4px; }
     .cw-macro-grid { gap: 3px; padding: 4px 6px; }
     .cw-macro-btn { padding: 6px 3px; font-size: 9px; min-height: 28px; }
     .cw-callsign-row { padding: 3px 6px; gap: 4px; }
     .cw-callsign-label { font-size: 10px; }
-    .cw-callsign-input { font-size: 11px; padding: 3px 4px; max-width: 100px; }
+    .cw-callsign-input { font-size: 12px; padding: 5px 4px; max-width: 120px; min-height: 28px; box-sizing: border-box; }
 }
 .cw-speed-ctrl {
     display: flex;
@@ -994,6 +1055,8 @@ body.digi-open #bottomBar { grid-row: 5; }
     overflow: hidden;
 }
 .digi-decode-col + .digi-decode-col { border-left: 1px solid #024; }
+.digi-pane-tabs { display: none; }   /* phone only — see the portrait block */
+.digi-pane-tabs .wf-tab-unread:empty { display: none; }
 /* Right combined column: directed takes all flex space; msg section is fixed */
 .digi-right-col { flex: 1; }
 .digi-right-col .digi-directed-panel { flex: 1; min-height: 0; }
@@ -1189,6 +1252,9 @@ body.digi-open #bottomBar { grid-row: 5; }
     border-radius: 2px;
 }
 .digi-freq-input:focus { outline: none; border-color: var(--mode-accent); background: #000820; }
+/* TX/RX audio-frequency boxes travel as one unit: on a phone the row wraps
+   and the whole group drops to its own line instead of orphaning RX. */
+.digi-freq-group { display: flex; align-items: center; gap: 5px; margin-left: auto; }
 .digi-tx-freq-display {
     font-family: var(--font-mono); font-size: 12px;
     color: var(--mode-accent); width: 52px; text-align: right;
@@ -1364,38 +1430,94 @@ body.digi-open #bottomBar { grid-row: 5; }
     flex-direction: column;
     justify-content: center;
     padding: 10px 16px;
-    gap: 8px;
+    gap: 5px;
 }
+.gain-section {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 9px; font-weight: bold;
+    color: #066; letter-spacing: 2px;
+    text-transform: uppercase;
+    margin: 6px 0 1px 0;
+}
+.gain-section::after {
+    content: ''; flex: 1; height: 1px;
+    background: linear-gradient(90deg, #033 0%, transparent 100%);
+}
+.gain-section.tx { color: #a60; }
+.gain-section.tx::after {
+    background: linear-gradient(90deg, #420 0%, transparent 100%);
+}
+.gain-section:first-child { margin-top: 0; }
 .gain-row {
     display: flex; align-items: center; gap: 8px;
 }
 .gain-label {
     font-size: 11px; color: #888; text-transform: uppercase;
-    width: 35px; text-align: right; letter-spacing: 1px;
+    width: 42px; text-align: right; letter-spacing: 1px;
     flex-shrink: 0; font-weight: bold;
 }
 .gain-bar-bg {
-    flex: 1; height: 20px;
-    background: #222; border-radius: 2px;
+    flex: 1; height: 18px;
+    background: linear-gradient(180deg, #161616 0%, #1f1f1f 50%, #161616 100%);
+    border-radius: 3px;
     position: relative; overflow: hidden;
     cursor: pointer;
+    box-shadow: inset 0 1px 2px rgba(0,0,0,0.7),
+                inset 0 0 0 1px rgba(255,255,255,0.04);
+}
+/* Tick marks at 25 / 50 / 75 % — visible above an empty bar, dimmed under fill */
+.gain-bar-bg::before {
+    content: '';
+    position: absolute;
+    top: 3px; bottom: 3px; left: 0; right: 0;
+    background:
+        linear-gradient(90deg,
+            transparent calc(25% - 1px), rgba(255,255,255,0.10) calc(25% - 1px), rgba(255,255,255,0.10) calc(25% + 1px), transparent calc(25% + 1px),
+            transparent calc(50% - 1px), rgba(255,255,255,0.18) calc(50% - 1px), rgba(255,255,255,0.18) calc(50% + 1px), transparent calc(50% + 1px),
+            transparent calc(75% - 1px), rgba(255,255,255,0.10) calc(75% - 1px), rgba(255,255,255,0.10) calc(75% + 1px), transparent calc(75% + 1px));
+    pointer-events: none;
+    z-index: 1;
 }
 .gain-bar-fill {
     height: 100%;
-    background: linear-gradient(90deg, #066, #0aa);
+    background: linear-gradient(90deg, #033 0%, #088 55%, #0cc 100%);
     border-radius: 2px;
+    box-shadow: 0 0 6px rgba(0, 204, 204, 0.45),
+                inset 0 1px 0 rgba(255,255,255,0.18);
     transition: width 0.05s linear;
+    position: relative;
+    z-index: 2;
 }
+/* Bright leading edge on every fill — like a meter needle */
+.gain-bar-fill::after {
+    content: '';
+    position: absolute;
+    right: 0; top: 0; bottom: 0;
+    width: 2px;
+    background: #afe;
+    box-shadow: 0 0 5px #0ff;
+}
+/* TX rows: warm amber instead of teal */
+.gain-row.tx .gain-bar-fill {
+    background: linear-gradient(90deg, #421 0%, #c70 55%, #fb0 100%);
+    box-shadow: 0 0 6px rgba(255, 170, 0, 0.45),
+                inset 0 1px 0 rgba(255,255,255,0.18);
+}
+.gain-row.tx .gain-bar-fill::after {
+    background: #fea;
+    box-shadow: 0 0 5px #fc0;
+}
+.gain-row.tx .gain-val { color: #fb0; }
 .gain-val {
     font-family: 'Courier New', monospace;
     font-size: 12px; width: 40px;
-    text-align: right; color: #0aa;
+    text-align: right; color: #0cc;
     flex-shrink: 0;
 }
 .gain-back-row {
     display: flex;
     justify-content: flex-end;
-    margin-top: 6px;
+    margin-top: 8px;
 }
 .gain-back-row .ov-btn {
     width: 60px;
@@ -1460,6 +1582,7 @@ body.digi-open #bottomBar { grid-row: 5; }
     width: 100%; height: 100%;
     opacity: 0; cursor: pointer;
     margin: 0;
+    z-index: 3;
 }
 
 /* FILTER window — same .mem-modal shell as DUP/TONE. Segmented rows share
@@ -1615,10 +1738,15 @@ body.digi-open #bottomBar { grid-row: 5; }
 /* Write prompt */
 .gain-bar-fill.centered {
     position: absolute; top: 0; height: 100%;
-    background: linear-gradient(90deg, #066, #0aa);
+    background: linear-gradient(90deg, #066 0%, #0aa 50%, #066 100%);
     border-radius: 2px;
     transition: left 0.05s linear, width 0.05s linear;
+    box-shadow: 0 0 6px rgba(0, 204, 204, 0.35),
+                inset 0 1px 0 rgba(255,255,255,0.15);
+    z-index: 2;
 }
+/* PBT bars don't need a leading-edge needle — they grow symmetrically */
+.gain-bar-fill.centered::after { display: none; }
 
 /* FREQ INPUT overlay */
 #freqOverlay.visible {
@@ -1859,21 +1987,66 @@ body.digi-open #bottomBar { grid-row: 5; }
     /* Stack TX EVEN/ODD and CALL CQ buttons vertically */
     .digi-msg-cq-bar { flex-direction: column; gap: 2px; }
     /* Compact message rows on mobile */
-    .digi-msg-row { padding: 1px 3px; gap: 2px; }
-    .digi-msg-row-input { font-size: 9px; }
+    /* Message rows stay compact but every control is >= 26px tall so it
+       can actually be tapped (the 14-18px originals were below the 24px
+       WCAG floor). The row box grows to 130px and scrolls. */
+    .digi-msg-row { padding: 2px 3px; gap: 4px; }
+    .digi-msg-row-input { font-size: 11px; min-height: 26px; box-sizing: border-box; }
     .digi-msg-row-warn { padding-left: 6px; }
-    .digi-msg-send-btn { min-width: 46px; font-size: 8px; }
-    .digi-cq-parity-btn, .digi-call-cq-btn { font-size: 8px; padding: 2px 2px; }
-    /* Limit msg rows height tighter on mobile */
-    .digi-right-col .digi-msg-rows { max-height: 80px; }
+    .digi-msg-send-btn { min-width: 52px; min-height: 26px; font-size: 10px; }
+    .digi-cq-parity-btn, .digi-call-cq-btn { font-size: 10px; padding: 4px 2px; min-height: 26px; }
+    .digi-right-col .digi-msg-rows { max-height: 130px; }
     /* All Decodes panel: keep SNR, hide dt and Hz */
     #digiRxPanel .digi-decode-dt,
     #digiRxPanel .digi-decode-freq { display: none; }
+    /* Phone: two columns don't fit — the Directed pane collapsed to one
+       clipped line under the QSO message rows, and decodes squeezed into
+       half the width. Show one pane at a time, full width, picked by the
+       tab strip (DECODES / DIRECTED / MESSAGES). */
+    .digi-pane-tabs { display: flex; gap: 2px; padding: 3px 4px 0; background: #000820; border-bottom: 1px solid #024; flex-shrink: 0; }
+    .digi-pane-tabs .wf-tab { flex: 1; justify-content: center; min-height: 26px; font-size: 10px; }
+    .digi-decode-area { flex-direction: column; }
+    .digi-decode-col + .digi-decode-col { border-left: 0; }
+    .digi-decode-area .digi-col-header { display: none; }
+    .digi-decode-area[data-pane="rx"] .digi-right-col { display: none; }
+    .digi-decode-area:not([data-pane="rx"]) .digi-decode-col:not(.digi-right-col) { display: none; }
+    .digi-decode-area[data-pane="directed"] .digi-msg-cq-bar,
+    .digi-decode-area[data-pane="directed"] .digi-msg-rows { display: none; }
+    .digi-decode-area[data-pane="msgs"] .digi-directed-panel { display: none; }
+    .digi-decode-area[data-pane="msgs"] .digi-right-col .digi-msg-rows { max-height: none; flex: 1; }
     /* Status bar: wrap after clock, DX+buttons on row 2 */
     .digi-status-bar { flex-wrap: wrap; }
-    .digi-mobile-break { flex-basis: 100%; height: 0; }
+    .digi-mobile-break { display: block; flex: 0 0 100%; height: 0; order: 1; } /* hidden on desktop; rigid, or it shrinks to 0 and stops breaking */
+    /* Row 1: IDLE, progress, clock … Tune (right-aligned). Row 2: DX box +
+       Enable/Halt. Four controls after the DX box didn't fit 360px and
+       Tune spilled out. */
+    .digi-status-bar .digi-field-label, .digi-status-bar .digi-callsign-input,
+    .digi-enable-tx-btn, .digi-halt-btn { order: 2; }
+    .digi-tune-btn { margin-left: auto; }
     .digi-status-bar .digi-callsign-input { flex: 1 1 40px; width: auto; min-width: 40px; }
-    .digi-enable-tx-btn, .digi-halt-btn, .digi-tune-btn { font-size: 10px; padding: 2px 5px; flex-shrink: 0; }
+    .digi-enable-tx-btn, .digi-halt-btn, .digi-tune-btn { font-size: 10px; padding: 5px 8px; min-height: 26px; flex-shrink: 0; }
+    .digi-action-row { padding: 3px 6px; }
+    .digi-tx-freq-display, .digi-rx-freq-display { min-height: 26px; box-sizing: border-box; }
+    /* Modal close/action buttons (DUP, TONE, FIL, memories, log) and the
+       top-bar fullscreen glyph were 15-21px — too small for a thumb. */
+    .digi-settings-close { min-height: 28px; }
+    .mem-action-btn { min-height: 28px; padding: 5px 12px; }
+    #fullscreenBtn { min-width: 26px; padding: 0 4px; }
+    /* Top bar at 360px: with FreeDV on the mode badge reads "USB | RADE";
+       tighter gap + padding keep the whole bar inside the viewport. */
+    #topBar { gap: 4px; }
+    #rigTag { display: none; }   /* no room at 360px; the tab title still carries it */
+    #modeBtn { padding: 3px 5px; font-size: 11px; letter-spacing: 0; white-space: nowrap; }
+    /* QSO log: the 10-column grid is ~500px wide. On a phone drop Band
+       and both RST columns (band is implied by freq) and let Call flex. */
+    .digi-log-row { grid-template-columns: 54px 44px minmax(40px, 1fr) 58px 30px 18px 18px; gap: 2px; font-size: 9px; }
+    .digi-log-row .digi-log-call { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .digi-log-band, .digi-log-rstsent, .digi-log-rstrcvd, #dleBand, #dleRstSent, #dleRstRcvd { display: none; }
+    /* FreeDV readout is right-anchored and ~470px wide; let it wrap onto
+       two rows instead of pushing the mode link off the left edge. */
+    /* ...and keep it clear of the tile column (AUDIO/MIC/P.AMP/DUP/TONE/RF
+       GAIN readouts) that stacks down the left edge of the scope area. */
+    #freedvIndicator { flex-wrap: wrap; justify-content: flex-end; row-gap: 2px; max-width: calc(100% - 150px); }
 }
 </style>
 <!-- JS8 messenger panel styles — shared with the standalone build via
@@ -1934,6 +2107,7 @@ body.digi-open #bottomBar { grid-row: 5; }
 <div id="powerConfirm">
     <div class="dialog">
         <div class="dialog-title">Power off the radio?</div>
+        <div id="powerConfirmNote" class="dialog-note"></div>
         <div class="dialog-btns">
             <button class="btn-cancel" onclick="cancelPowerOff()">Cancel</button>
             <button class="btn-confirm" onclick="confirmPowerOff()">Power Off</button>
@@ -1950,6 +2124,7 @@ body.digi-open #bottomBar { grid-row: 5; }
         <span id="filterText" onclick="openFilterModal()">FIL1</span>
         <span id="dspIndicators"></span>
         <span class="flex-space"></span>
+        <span id="rigTag" title="Rig"></span>
         <button id="qsoLogBtn" class="qso-log-btn" title="Log QSO">LOG</button>
         <span id="clock">--:--</span>
         <button id="fullscreenBtn" title="Full Screen" onclick="toggleFullscreen()">&#x26F6;</button>
@@ -1959,7 +2134,8 @@ body.digi-open #bottomBar { grid-row: 5; }
     <!-- Row 2: Meter + Frequency -->
     <div id="meterFreqRow">
         <div id="meterSection">
-            <canvas id="meterCanvas" width="500" height="128"></canvas>
+            <canvas id="meterCanvas" width="500" height="128"
+                    title="Tap to change the bottom meter"></canvas>
         </div>
         <div id="freqSection">
             <div id="vfoLine">
@@ -2015,8 +2191,27 @@ body.digi-open #bottomBar { grid-row: 5; }
 
         <!-- Span overlay -->
         <div id="spanOverlay" class="overlay">
-            <div class="overlay-title">SPAN</div>
-            <div class="overlay-grid" id="spanGrid"></div>
+            <div class="scope-row"><span class="scope-row-label">Span</span>
+                <div class="overlay-grid" id="spanGrid"></div></div>
+            <div class="scope-row"><span class="scope-row-label">Mode</span>
+                <div class="overlay-grid">
+                    <button class="ov-btn active" id="wfTrackFixedBtn" onclick="setWfTracking('fixed')" title="Waterfall stays put on tune, like the rig's screen">FIXED</button>
+                    <button class="ov-btn" id="wfTrackTrackBtn" onclick="setWfTracking('track')" title="Waterfall history pans on tune so frequencies stay aligned">TRACK</button>
+                </div></div>
+            <div class="scope-row"><span class="scope-row-label">Ref</span>
+                <div class="overlay-grid">
+                    <button class="ov-btn active" id="scopeRefAutoBtn" onclick="setScopeRef(null)">AUTO</button>
+                    <button class="ov-btn" onclick="stepScopeRef(-1)">REF &minus;</button>
+                    <button class="ov-btn" onclick="stepScopeRef(1)">REF +</button>
+                    <span class="scope-row-value" id="scopeRefValue">AUTO</span>
+                </div></div>
+            <div class="scope-row"><span class="scope-row-label">Speed</span>
+                <div class="overlay-grid">
+                    <button class="ov-btn" id="wfSpeedSlowBtn" onclick="setWfSpeed('slow')">SLOW</button>
+                    <button class="ov-btn active" id="wfSpeedMidBtn" onclick="setWfSpeed('mid')">MID</button>
+                    <button class="ov-btn" id="wfSpeedFastBtn" onclick="setWfSpeed('fast')">FAST</button>
+                    <button class="ov-btn back-btn" onclick="setPanel('default')">&#x21A9;</button>
+                </div></div>
         </div>
 
         <!-- DUP window (styled like the memory browser). Opened from the DUP
@@ -2107,7 +2302,7 @@ body.digi-open #bottomBar { grid-row: 5; }
                     <button class="cw-mode-btn wf-btn" data-mode="words">WRD</button>
                     <button class="cw-mode-btn wf-btn" data-mode="lines">LN</button>
                 </div>
-                <button id="cwLogBtn" class="cw-log-btn wf-btn">LOG QSO</button>
+                <button id="cwLogBtn" class="cw-log-btn wf-btn">LOG<span class="cw-wide"> QSO</span></button>
                 <button id="cwStopBtn" class="cw-stop-btn wf-btn danger">STOP</button>
                 <button id="cwCloseBtn" class="cw-close-btn wf-btn sq">✕</button>
             </div>
@@ -2159,7 +2354,13 @@ body.digi-open #bottomBar { grid-row: 5; }
             </div>
 
             <!-- Two-column decode area -->
-            <div class="digi-decode-area">
+            <div class="digi-decode-area" id="digiDecodeArea" data-pane="rx">
+                <!-- Phone-only pane switcher; desktop shows both columns -->
+                <div class="digi-pane-tabs">
+                    <button class="wf-tab active" data-pane="rx" onclick="digiSetPane('rx')">DECODES</button>
+                    <button class="wf-tab" data-pane="directed" onclick="digiSetPane('directed')">DIRECTED<span class="wf-tab-unread" id="digiDirectedUnread"></span></button>
+                    <button class="wf-tab" data-pane="msgs" onclick="digiSetPane('msgs')">MESSAGES</button>
+                </div>
                 <!-- Left: All Decodes -->
                 <div class="digi-decode-col">
                     <div class="digi-col-header">All Decodes</div>
@@ -2196,13 +2397,14 @@ body.digi-open #bottomBar { grid-row: 5; }
                 <button id="digiLogQsoBtn" class="digi-action-btn wf-btn">Log QSO</button>
                 <button id="digiEraseBtn" class="digi-action-btn wf-btn">Erase</button>
                 <button id="digiHoldTxBtn" class="digi-action-btn wf-btn">Hold TX</button>
-                <div class="flex-space"></div>
-                <span class="digi-field-label">TX:</span>
-                <input type="number" id="digiTxFreqDisplay" class="digi-tx-freq-display" min="300" max="2800" step="1" value="1000">
-                <span class="digi-field-label">Hz</span>
-                <span class="digi-field-label">RX:</span>
-                <input type="number" id="digiRxFreqDisplay" class="digi-rx-freq-display" min="300" max="2800" step="1" value="1000">
-                <span class="digi-field-label">Hz</span>
+                <div class="digi-freq-group">
+                    <span class="digi-field-label">TX:</span>
+                    <input type="number" id="digiTxFreqDisplay" class="digi-tx-freq-display" min="300" max="2800" step="1" value="1000">
+                    <span class="digi-field-label">Hz</span>
+                    <span class="digi-field-label">RX:</span>
+                    <input type="number" id="digiRxFreqDisplay" class="digi-rx-freq-display" min="300" max="2800" step="1" value="1000">
+                    <span class="digi-field-label">Hz</span>
+                </div>
             </div>
 
         </div>
@@ -2301,6 +2503,7 @@ body.digi-open #bottomBar { grid-row: 5; }
 
         <!-- Gain overlay -->
         <div id="gainOverlay" class="overlay">
+            <div class="gain-section">RX</div>
             <div class="gain-row">
                 <span class="gain-label">AF</span>
                 <div class="gain-bar-bg"><div class="gain-bar-fill" id="afGainFill" style="width:50%"></div>
@@ -2314,24 +2517,25 @@ body.digi-open #bottomBar { grid-row: 5; }
                 <span class="gain-val" id="rfGainVal">50%</span>
             </div>
             <div class="gain-row">
-                <span class="gain-label">PWR</span>
-                <div class="gain-bar-bg"><div class="gain-bar-fill" id="rfPowerFill" style="width:50%"></div>
-                    <input type="range" id="rfPowerSlider" min="0" max="255" value="128"></div>
-                <span class="gain-val" id="rfPowerVal">50%</span>
-            </div>
-            <div class="gain-row">
                 <span class="gain-label">SQL</span>
                 <div class="gain-bar-bg"><div class="gain-bar-fill" id="squelchFill" style="width:0%"></div>
                     <input type="range" id="squelchSlider" min="0" max="255" value="0"></div>
                 <span class="gain-val" id="squelchVal">0%</span>
             </div>
-            <div class="gain-row">
+            <div class="gain-section tx">TX</div>
+            <div class="gain-row tx">
+                <span class="gain-label">PWR</span>
+                <div class="gain-bar-bg"><div class="gain-bar-fill" id="rfPowerFill" style="width:50%"></div>
+                    <input type="range" id="rfPowerSlider" min="0" max="255" value="128"></div>
+                <span class="gain-val" id="rfPowerVal">50%</span>
+            </div>
+            <div class="gain-row tx">
                 <span class="gain-label">USB MIC</span>
                 <div class="gain-bar-bg"><div class="gain-bar-fill" id="micGainFill" style="width:50%"></div>
                     <input type="range" id="micGainSlider" min="0" max="255" value="128"></div>
                 <span class="gain-val" id="micGainVal">50%</span>
             </div>
-            <div class="gain-row">
+            <div class="gain-row tx">
                 <span class="gain-label">MON</span>
                 <div class="gain-bar-bg"><div class="gain-bar-fill" id="monitorLevelFill" style="width:50%"></div>
                     <input type="range" id="monitorLevelSlider" min="0" max="255" value="128"></div>
@@ -2453,6 +2657,25 @@ var transport = null;         // alias to wsTransport
 var ws = null;                // alias to wsTransport.ws — legacy readyState checks
 var serverVersion = '';  // set from rigInfo message
 var rigModelName = '';   // set from rigInfo/rigConnected
+var rigTagName = '';     // server --name override (rigInfo.name); empty = show the model
+function updateRigTag() {
+    var label = rigTagName || rigModelName;
+    var el = document.getElementById('rigTag');
+    if (el) {
+        el.textContent = label;
+        el.title = (rigTagName && rigModelName) ? rigModelName : 'Rig';
+    }
+    document.title = label ? label + ' \u2013 wfweb' : 'wfweb';
+}
+// Rigs that only accept the CI-V power-on command on a connector wfweb may not
+// be using (the IC-7600's [REMOTE] jack — its USB dies in standby).  Server
+// sets this per rig; it turns the power-off confirm into a warning (#104).
+var powerOnNeedsRemoteJack = false;
+// Rig declares the CI-V power control command (funcPowerControl).  Rigs whose
+// .rig file has no entry (IC-718, IC-706 family, IC-9100, IC-746 family, the
+// IC-756 family, IC-R7100, DEFAULT-ICOM) cannot be switched on or off from
+// here, so the toolbar power button stays hidden for them.
+var hasPowerControl = false;
 // Shared app-wide callsign (CW, FT8/FT4, FreeDV reporter, APRS, Terminal,
 // logbook).  Single source of truth backed by localStorage with a change
 // event so each panel can keep its own widgets in sync without polling.
@@ -2640,6 +2863,35 @@ var wfOffCanvas = null;
 var wfOffCtx = null;
 var spectRenderPending = false;
 var colorTable = null;
+// Browser-side scope settings (persisted in localStorage).
+var wfTracking = 'fixed';        // 'fixed' | 'track' — waterfall scrolling on tune, see setWfTracking()
+var wfSpeed = 'mid';             // 'slow' | 'mid' | 'fast' — waterfall rows per sweep, mirrored to the rig's scope speed
+var WF_SPEED_ROWS = { slow: 1, mid: 2, fast: 4 };
+var WF_SPEED_CIV = { fast: 0, mid: 1, slow: 2 };   // CI-V 27 1A values
+var wfPrevSweep = null;          // previous sweep, blended into the in-between rows at MID / FAST
+var scopeRefDb = null;           // null = AUTO, else -20..+20 dB in 2.5 dB steps (mirrored to the rig)
+var wfAutoRefDb = 0;             // AUTO's pick: the REF that seats the noise floor on the palette floor
+var wfAutoRefCalibrated = false;
+var wfEmaFloor = 0;              // tracked noise floor, in wave-data counts
+var wfFloorCalibrated = false;
+var spectHold = [];              // recent sweeps {t, data} behind the grey peak-hold afterglow
+var spectHoldStart = 0, spectHoldEnd = 0;
+// The trace as drawn eases toward each new sweep instead of jumping: the
+// IC-7300 only delivers ~4 sweeps/s over USB, so a hard cut every 240 ms
+// looks like a slideshow. Cosmetic only — the hold ghost and the waterfall
+// use the raw sweeps.
+var spectShown = null;           // Float32Array: the eased trace being drawn
+var spectFrom = null;            // Float32Array: where the current ease started
+var spectTweenStart = 0;         // 0 = no ease in progress (draw the sweep as is)
+var spectTweenMs = 200;          // ease duration, follows the measured inter-sweep gap
+var spectLastSweepAt = 0;
+var spectTweenPending = false;
+var scopeSweepGapMs = 250;       // smoothed inter-sweep gap: the rig's own cadence
+// The waterfall slides continuously between sweeps instead of stepping n
+// rows when one lands: the picture drifts down by the rows the next sweep
+// will add, timed to the cadence, so the new rows arrive where the slide is.
+var wfBufDirty = true;           // offscreen buffer changed since the last putImageData
+var wfScrollRows = 0;            // rows the buffer scrolled at the last sweep
 var scopeFreezeDuringDrag = false;
 var scopeDragActive = false;
 var scopeDragMoved = false;
@@ -2683,6 +2935,7 @@ var freqInputBuf = '';
 // DIGI (FT8/FT4) state
 var digiBarVisible = false;
 var cwBarSuspended = false;   // true while cw bar is hidden due to an overlay being open
+var cwDecoderAutoStartPending = false; // CW entered before the audio path was up
 var digiBarSuspended = false; // true while digi bar is hidden due to an overlay being open
 var digiMode = 'FT8';
 var digiRxEnabled = true;
@@ -2841,13 +3094,15 @@ function handleMessage(msg) {
                 if (pv) pv.textContent = 'wfweb v. ' + msg.version;
             }
             if (msg.model) rigModelName = msg.model;
+            if (msg.name !== undefined) rigTagName = msg.name || '';
+            updateRigTag();
             if (msg.freedvModes) freedvModes = msg.freedvModes;
             if (msg.isLan !== undefined || msg.lanConnected !== undefined) {
                 updateLanStatus(!!msg.isLan, msg.lanConnected !== undefined ? !!msg.lanConnected : lanConnected);
             }
             if (msg.connected) {
                 if (msg.modes) populateModes(msg.modes);
-                if (msg.hasSpectrum) { hasSpectrum = true; spectAmpMax = msg.spectAmpMax || 160; }
+                if (msg.hasSpectrum) { hasSpectrum = true; spectAmpMax = msg.spectAmpMax || 160; scopeRigAssert(); }
                 if (msg.audioAvailable) { audioAvailable = true; audioSampleRate = msg.audioSampleRate || 48000; }
                 if (msg.audioError) showAudioError(msg.audioError);
                 updateTxAudioAvailable(msg.txAudioAvailable || false);
@@ -2863,8 +3118,11 @@ function handleMessage(msg) {
                 if (msg.hasDuplex !== undefined) hasDuplex = !!msg.hasDuplex;
                 updateToneCaps(msg);
                 if (msg.hasTuner !== undefined) updateHasTuner(!!msg.hasTuner);
+                if (msg.txMeters !== undefined) setTxMeterCaps(msg.txMeters);
                 if (msg.hasMemoryMode !== undefined) hasMemoryMode = !!msg.hasMemoryMode;
                 if (msg.memGroups !== undefined) setupMemoryGroups(msg.memGroups, msg.memStart || 0);
+                if (msg.hasPowerControl !== undefined) updateHasPowerControl(msg.hasPowerControl);
+                if (msg.powerOnNeedsRemoteJack !== undefined) powerOnNeedsRemoteJack = !!msg.powerOnNeedsRemoteJack;
 
                 updateWarningVisibility();
                 applyUrlTune();
@@ -2875,8 +3133,9 @@ function handleMessage(msg) {
             break;
         case 'rigConnected':
             if (msg.model) rigModelName = msg.model;
+            updateRigTag();
             if (msg.modes) populateModes(msg.modes);
-            if (msg.hasSpectrum) { hasSpectrum = true; spectAmpMax = msg.spectAmpMax || 160; }
+            if (msg.hasSpectrum) { hasSpectrum = true; spectAmpMax = msg.spectAmpMax || 160; scopeRigAssert(); }
             if (msg.audioAvailable) { audioAvailable = true; audioSampleRate = msg.audioSampleRate || 48000; }
             if (msg.audioError) showAudioError(msg.audioError);
             updateTxAudioAvailable(msg.txAudioAvailable || false);
@@ -2892,9 +3151,11 @@ function handleMessage(msg) {
             if (msg.hasDuplex !== undefined) hasDuplex = !!msg.hasDuplex;
             updateToneCaps(msg);
             if (msg.hasTuner !== undefined) updateHasTuner(!!msg.hasTuner);
+            if (msg.txMeters !== undefined) setTxMeterCaps(msg.txMeters);
             if (msg.hasMemoryMode !== undefined) hasMemoryMode = !!msg.hasMemoryMode;
             if (msg.memGroups !== undefined) setupMemoryGroups(msg.memGroups, msg.memStart || 0);
-            if (msg.hasPowerControl) document.getElementById('powerBtn').style.display = 'flex';
+            if (msg.hasPowerControl !== undefined) updateHasPowerControl(msg.hasPowerControl);
+            if (msg.powerOnNeedsRemoteJack !== undefined) powerOnNeedsRemoteJack = !!msg.powerOnNeedsRemoteJack;
             if (msg.freedvModes) freedvModes = msg.freedvModes;
             updateWarningVisibility();
             applyUrlTune();
@@ -2915,6 +3176,7 @@ function handleMessage(msg) {
         case 'audioStatus':
             if (msg.enabled) { audioEnabled = true; audioSampleRate = msg.sampleRate || audioSampleRate; }
             else { audioEnabled = false; }
+            if (audioEnabled && cwDecoderAutoStartPending) startCwDecoder(20);
             renderBottomBar();
             updateWarningVisibility();
             if (currentPanel === 'audiomiс') renderAudioMicOverlay();
@@ -2981,6 +3243,9 @@ function handleMessage(msg) {
             if (msg.powerMeter !== undefined) updatePowerMeter(msg.powerMeter);
             if (msg.swrMeter !== undefined) updateSwrMeter(msg.swrMeter);
             if (msg.alcMeter !== undefined) updateALCMeter(msg.alcMeter);
+            if (msg.compMeter !== undefined) updateCompMeter(msg.compMeter);
+            if (msg.vdMeter !== undefined) updateVdMeter(msg.vdMeter);
+            if (msg.idMeter !== undefined) updateIdMeter(msg.idMeter);
             if (msg.transmitting !== undefined) updateTxStatus(msg.transmitting);
             if (msg.afGain !== undefined) updateSlider('afGain', msg.afGain);
             if (msg.rfGain !== undefined) updateSlider('rfGain', msg.rfGain);
@@ -3017,6 +3282,9 @@ function handleMessage(msg) {
             if (msg.powerMeter !== undefined) updatePowerMeter(msg.powerMeter);
             if (msg.swrMeter !== undefined) updateSwrMeter(msg.swrMeter);
             if (msg.alcMeter !== undefined) updateALCMeter(msg.alcMeter);
+            if (msg.compMeter !== undefined) updateCompMeter(msg.compMeter);
+            if (msg.vdMeter !== undefined) updateVdMeter(msg.vdMeter);
+            if (msg.idMeter !== undefined) updateIdMeter(msg.idMeter);
             if (msg.freedvSync !== undefined || msg.freedvSNR !== undefined) {
                 // Update stats values directly — avoid full updateFreeDVStatus
                 // which re-renders overlays and interferes with button clicks
@@ -3237,9 +3505,28 @@ function autoOpenCwBarOnModeEntry() {
             btn.classList.toggle('active', btn.dataset.mode === cwMode);
         });
     }
+    startCwDecoder(20);
+}
+
+// Turn the decoder on, waiting for whatever isn't ready yet. Landing
+// straight in CW (rig already in CW at page load, or ?m=CW) reaches
+// autoOpenCwBarOnModeEntry before the RX audio path is up — on the server
+// build audio only starts from the splash gesture — and possibly before
+// cw-decoder.js has injected its DECODE button. Retry for the button,
+// and remember the intent across the audio wait.
+function startCwDecoder(tries) {
+    if (currentMode !== 'CW' && currentMode !== 'CW-R') {
+        cwDecoderAutoStartPending = false;
+        return;
+    }
+    if (!audioEnabled) { cwDecoderAutoStartPending = true; return; }
     var decodeBtn = document.getElementById('cwDecoderToggle');
-    if (decodeBtn && audioEnabled
-        && !decodeBtn.classList.contains('active')
+    if (!decodeBtn) {
+        if (tries > 0) setTimeout(function() { startCwDecoder(tries - 1); }, 250);
+        return;
+    }
+    cwDecoderAutoStartPending = false;
+    if (!decodeBtn.classList.contains('active')
         && !decodeBtn.classList.contains('loading')) {
         decodeBtn.click();
     }
@@ -3525,6 +3812,15 @@ function updateToggle(name, state) {
     if (currentPanel === 'func') renderFuncOverlay();
 }
 
+// Power capability gate. Rigs whose .rig file declares no Power Control
+// command can neither be switched off nor woken over CI-V, so hide the
+// toolbar power button for them rather than offering a no-op.
+function updateHasPowerControl(on) {
+    hasPowerControl = !!on;
+    var btn = document.getElementById('powerBtn');
+    if (btn) btn.style.display = hasPowerControl ? 'flex' : 'none';
+}
+
 // Tuner capability gate. Rigs with no ATU (IC-9700/905, the receivers, the
 // older HF rigs) never declare the CI-V tuner command, so hide the top-bar
 // TUNE tile for them. The inline style outranks the .active class that
@@ -3777,8 +4073,8 @@ var meterPeakCount = 0;         // held peak fill level (in segments)
 var meterPeakTs = 0;
 var txPoPeakCount = 0;          // TX Po bar peak hold
 var txPoPeakTs = 0;
-var txSwrPeakCount = 0;         // TX SWR bar peak hold
-var txSwrPeakTs = 0;
+var txAuxPeakCount = 0;         // TX bottom-bar peak hold
+var txAuxPeakTs = 0;
 
 var alcVal = 0;
 var digiTxGain = 0.25;         // FT8/FT4 audio gain multiplier (conservative start)
@@ -3793,6 +4089,194 @@ var ALC_EMA_ALPHA = 0.15;      // EMA smoothing factor (lower = smoother)
 function updateSMeter(val) { meterVal = val; if (!isTransmitting) drawMeter(); }
 function updatePowerMeter(val) { powerVal = val; if (isTransmitting) drawMeter(); }
 function updateSwrMeter(val) { swrVal = val; if (isTransmitting) drawMeter(); }
+
+// ---- Switchable bottom meter --------------------------------------------
+// The meter's bottom row is the radio's multi-function meter: SWR by default,
+// and a tap on the meter cycles to ALC / COMP / Vd / Id. During TX it reads
+// live; during RX it is ornamental and only says which reading is armed —
+// same as the face on the radio, which keeps showing the selection with the
+// pointer at rest. Power always owns the top row, so it is not in the cycle.
+//
+// Only readings this radio can actually produce are offered: the rig
+// capabilities carry one descriptor per available meter, each with the
+// radio's own calibration table so the face can be drawn to match.
+var txMeterKind = 'swr';
+try { txMeterKind = localStorage.getItem('wfTxMeter') || 'swr'; } catch (e) {}
+var txMeterCaps = [];        // [{kind, cal: [[rigVal, reading], ...], red}]
+var compVal = 0, vdVal = 0, idVal = 0;
+var TX_METER_LABELS = { swr: 'SWR', alc: 'ALC', comp: 'COMP', vd: 'Vd', id: 'Id' };
+var TX_METER_UNITS  = { swr: '', alc: '', comp: 'dB', vd: 'V', id: 'A' };
+
+function updateCompMeter(val) { compVal = val; if (isTransmitting) drawMeter(); }
+function updateVdMeter(val)   { vdVal = val;   if (isTransmitting) drawMeter(); }
+function updateIdMeter(val)   { idVal = val;   if (isTransmitting) drawMeter(); }
+
+function txMeterValue(kind) {
+    return kind === 'alc'  ? alcVal
+         : kind === 'comp' ? compVal
+         : kind === 'vd'   ? vdVal
+         : kind === 'id'   ? idVal : swrVal;
+}
+
+function txMeterDesc(kind) {
+    for (var i = 0; i < txMeterCaps.length; i++)
+        if (txMeterCaps[i].kind === kind) return txMeterCaps[i];
+    return null;
+}
+
+// Called when the rig identifies itself. A radio that can't produce the
+// remembered reading falls back to SWR rather than showing a dead bar.
+function setTxMeterCaps(list) {
+    txMeterCaps = Array.isArray(list) ? list : [];
+    if (!txMeterDesc(txMeterKind)) txMeterKind = 'swr';
+    var canvas = document.getElementById('meterCanvas');
+    if (canvas) canvas.style.cursor = txMeterCaps.length > 1 ? 'pointer' : '';
+    sendTxMeterSelection();
+    drawMeter();
+}
+
+// Comp/Vd/Id each cost the radio an extra poll, so the backend only reads
+// the one that is showing.
+function sendTxMeterSelection() { send({ cmd: 'setTxMeter', value: txMeterKind }); }
+
+function cycleTxMeter() {
+    if (txMeterCaps.length < 2) return;
+    var i = 0;
+    for (var n = 0; n < txMeterCaps.length; n++)
+        if (txMeterCaps[n].kind === txMeterKind) { i = n; break; }
+    txMeterKind = txMeterCaps[(i + 1) % txMeterCaps.length].kind;
+    try { localStorage.setItem('wfTxMeter', txMeterKind); } catch (e) {}
+    txAuxPeakCount = 0;
+    sendTxMeterSelection();
+    drawMeter();
+}
+
+// Face for the bottom row. SWR keeps the face the radio prints (1 / 1.5 / 2 /
+// 2.5 / 3, then a red zone running to infinity). Every other reading is drawn
+// straight from the rig's calibration table: the radio's bar is linear in the
+// raw register value, so each table point belongs at rigVal/maxRigVal and is
+// labelled with the reading it stands for — which is the face on the radio.
+function txMeterFace(kind, barW) {
+    if (kind !== 'swr') {
+        var d = txMeterDesc(kind);
+        if (d && d.cal && d.cal.length >= 2) return calMeterFace(kind, d);
+    }
+    return {
+        label: 'SWR',
+        marks: (barW >= 220)
+            ? [['1', 0], ['1.5', 0.165], ['2', 0.33], ['2.5', 0.5], ['3', 0.66]]
+            : [['1', 0], ['2', 0.33], ['3', 0.66]],
+        tail: '∞',
+        redFrac: 0.66,
+        // Tracks the printed scale: linear 1..3 over the left 2/3, then
+        // 3..6 compressed into the red zone toward infinity.
+        frac: function (v) { return (v <= 3) ? (v - 1) * 0.33 : 0.66 + (v - 3) * (0.34 / 3); },
+        text: function (v) { return v.toFixed(1); }
+    };
+}
+
+function calMeterFace(kind, d) {
+    var cal = d.cal;
+    var maxRaw = cal[cal.length - 1][0] || 255;
+    // The radio prints no numbers on its ALC scale either — it is a plain bar
+    // with a red zone — so only the ticks are drawn for it. Its red zone is
+    // also the one landmark every Icom marks the same way: the point the
+    // tables call 1.0, where ALC action starts. A couple of .rig files flag
+    // the top of the scale instead, which would leave the row with no zone
+    // at all, so prefer the 1.0 point when the table has one.
+    var numbered = (kind !== 'alc');
+    var red = d.red;
+    if (kind === 'alc') {
+        for (var r = 0; r < cal.length; r++) if (cal[r][1] === 1) red = 1;
+    }
+    var marks = [], redFrac = null;
+    for (var i = 0; i < cal.length; i++) {
+        var frac = cal[i][0] / maxRaw;
+        marks.push([numbered ? fmtMeterNum(cal[i][1]) : '', frac]);
+        if (red !== undefined && cal[i][1] === red) redFrac = frac;
+    }
+    var unit = TX_METER_UNITS[kind] || '';
+    return {
+        label: TX_METER_LABELS[kind] || kind,
+        marks: marks,
+        tail: null,
+        redFrac: redFrac,
+        frac: function (v) { return calToFrac(cal, v); },
+        text: function (v) { return fmtMeterNum(v) + unit; }
+    };
+}
+
+function fmtMeterNum(v) { return String(Math.round(v * 10) / 10); }
+
+// Invert a calibration table: reading -> bar fraction. Readings rise with the
+// raw register value in every table, so a piecewise walk is enough.
+function calToFrac(cal, v) {
+    var maxRaw = cal[cal.length - 1][0] || 255;
+    if (v <= cal[0][1]) return 0;
+    for (var i = 1; i < cal.length; i++) {
+        if (v <= cal[i][1]) {
+            var r0 = cal[i - 1][0], a0 = cal[i - 1][1];
+            var r1 = cal[i][0],     a1 = cal[i][1];
+            return ((a1 === a0) ? r1 : r0 + (r1 - r0) * (v - a0) / (a1 - a0)) / maxRaw;
+        }
+    }
+    return 1;
+}
+
+// Row label in the narrow left column. 'COMP' is wider than 'SWR' or 'Po',
+// so step the font down instead of letting it run under the bar.
+function drawMeterRowLabel(ctx, text, x, y, fs, maxW) {
+    ctx.textAlign = 'left';
+    ctx.font = fs + 'px system-ui, sans-serif';
+    while (fs > 6 && ctx.measureText(text).width > maxW) {
+        fs--;
+        ctx.font = fs + 'px system-ui, sans-serif';
+    }
+    ctx.fillText(text, x, y);
+}
+
+document.addEventListener('DOMContentLoaded', function () {
+    var canvas = document.getElementById('meterCanvas');
+    if (canvas) canvas.addEventListener('click', cycleTxMeter);
+});
+
+// The bottom row's static scale — ticks, numbers, red zone. Shared by the RX
+// face (where the row is ornamental) and the TX face (where it has a live bar
+// sitting on it).
+function drawTxMeterScale(ctx, barX, barW, tickY, numY, fs, tickH, face) {
+    ctx.font = fs + 'px system-ui, sans-serif';
+    ctx.textBaseline = 'top';
+    // Calibration points can sit very close together (the IC-705 reads 10 V
+    // at raw 13), so a number is dropped when it would run into the one
+    // before it. The tick stays either way.
+    var usedTo = -1e9;
+    for (var m = 0; m < face.marks.length; m++) {
+        var mx = barX + face.marks[m][1] * barW;
+        var red = (face.redFrac !== null && face.marks[m][1] > face.redFrac);
+        ctx.fillStyle = red ? METER_SCALE_RED : '#aaa';
+        ctx.fillRect(Math.round(mx) - 0.5, tickY, 1, tickH - 1);
+        if (!face.marks[m][0]) continue;
+        var last = (m === face.marks.length - 1) && !face.tail;
+        var w = ctx.measureText(face.marks[m][0]).width;
+        var left = (m === 0) ? mx - 1 : last ? mx - w : mx - w / 2;
+        if (left < usedTo) continue;
+        usedTo = left + w + 4;
+        ctx.fillStyle = red ? METER_SCALE_RED : '#ccc';
+        ctx.textAlign = (m === 0) ? 'left' : last ? 'right' : 'center';
+        ctx.fillText(face.marks[m][0], (m === 0) ? mx - 1 : mx, numY);
+    }
+    // Red-zone ticks, starting where the radio's own face turns red.
+    if (face.redFrac !== null) {
+        ctx.fillStyle = METER_SCALE_RED;
+        for (var rz = face.redFrac + 0.07; rz <= 0.93; rz += 0.063)
+            ctx.fillRect(Math.round(barX + rz * barW) - 0.5, tickY, 1, tickH - 1);
+    }
+    if (face.tail) {
+        ctx.textAlign = 'right';
+        ctx.fillStyle = '#ccc';
+        ctx.fillText(face.tail, barX + barW, numY);
+    }
+}
 function updateALCMeter(val) {
     alcVal = val;
     if (isTransmitting) drawMeter();
@@ -3884,14 +4368,15 @@ function drawSMeter(ctx, cw, ch, barX, barW) {
     var segY  = y0 + numH + tickH + 1;        // top of segment bar
     var lineY = segY + segH + 1;              // white baseline under the bar
 
-    // --- "S" / "SWR" row labels (left column) ---
+    // --- "S" / selected-meter row labels (left column) ---
+    var face = txMeterFace(txMeterKind, barW);
     ctx.font = fs + 'px system-ui, sans-serif';
     ctx.textAlign = 'left';
     ctx.textBaseline = 'top';
     ctx.fillStyle = '#ddd';
     ctx.fillText('S', 2, y0 + 1);
     ctx.fillStyle = '#bbb';
-    ctx.fillText('SWR', 2, lineY + 2);
+    drawMeterRowLabel(ctx, face.label, 2, lineY + 2, fs, barX - 4);
 
     // --- S scale: 1 3 5 7 9 in white, +20/+40/+60dB in red ---
     ctx.font = 'bold ' + fs + 'px system-ui, sans-serif';
@@ -3949,34 +4434,14 @@ function drawSMeter(ctx, cw, ch, barX, barW) {
     ctx.fillStyle = METER_BASELINE;
     ctx.fillRect(barX, lineY, barW, 1);
 
-    // --- SWR scale below the bar (static face, like the rig) ---
-    var swrTickY = lineY + 2;
-    var swrNumY  = swrTickY + tickH;
-    var swrMarks = (barW >= 220)
-        ? [['1', 0], ['1.5', 0.165], ['2', 0.33], ['2.5', 0.5], ['3', 0.66]]
-        : [['1', 0], ['2', 0.33], ['3', 0.66]];
-    ctx.font = fs + 'px system-ui, sans-serif';
-    for (var m = 0; m < swrMarks.length; m++) {
-        var mx = barX + swrMarks[m][1] * barW;
-        ctx.fillStyle = '#aaa';
-        ctx.fillRect(Math.round(mx) - 0.5, swrTickY, 1, tickH - 1);
-        ctx.fillStyle = '#ccc';
-        ctx.textAlign = (m === 0) ? 'left' : 'center';
-        ctx.fillText(swrMarks[m][0], (m === 0) ? mx - 1 : mx, swrNumY);
-    }
-    // red over-3 zone ticks + infinity at the right end
-    ctx.fillStyle = METER_SCALE_RED;
-    for (var rz = 0.73; rz <= 0.92; rz += 0.063)
-        ctx.fillRect(Math.round(barX + rz * barW) - 0.5, swrTickY, 1, tickH - 1);
-    ctx.textAlign = 'right';
-    ctx.fillStyle = '#ccc';
-    ctx.fillText('∞', barX + barW, swrNumY);
+    // --- Selected meter's scale below the bar (static face, like the rig) ---
+    drawTxMeterScale(ctx, barX, barW, lineY + 2, lineY + 2 + tickH, fs, tickH, face);
 }
 
 function drawTxMeters(ctx, cw, ch, barX, barW) {
     // TX face, same visual language as the RX face in drawSMeter: Po scale
-    // and tile bar on top, live SWR tile bar sitting on the static SWR
-    // scale below (the row that is ornamental during RX).
+    // and tile bar on top, and the selected meter's live tile bar sitting on
+    // the static scale below (the row that is ornamental during RX).
     var k      = barW >= 300 ? 6 : barW >= 190 ? 4 : 2;
     var tiles  = 18 * k + 1;
     var pitch  = barW / tiles;
@@ -3997,19 +4462,21 @@ function drawTxMeters(ctx, cw, ch, barX, barW) {
 
     var poSegY   = y0 + numH + tickH + 1;      // top of the Po bar
     var poLineY  = poSegY + segH + 1;          // white baseline under it
-    var swrSegY  = poLineY + 1 + midGap;       // top of the SWR bar
-    var swrLineY = swrSegY + segH + 1;         // white baseline under it
-    var swrTickY = swrLineY + 2;
-    var swrNumY  = swrTickY + tickH;
+    var auxSegY  = poLineY + 1 + midGap;       // top of the selected meter's bar
+    var auxLineY = auxSegY + segH + 1;         // white baseline under it
+    var auxTickY = auxLineY + 2;
+    var auxNumY  = auxTickY + tickH;
 
-    // --- "Po" / "SWR" row labels (left column) ---
+    // --- "Po" / selected-meter row labels (left column) ---
+    var face = txMeterFace(txMeterKind, barW);
+    var auxVal = txMeterValue(txMeterKind);
     ctx.font = fs + 'px system-ui, sans-serif';
     ctx.textAlign = 'left';
     ctx.textBaseline = 'top';
     ctx.fillStyle = '#ddd';
     ctx.fillText('Po', 2, y0 + 1);
     ctx.fillStyle = '#bbb';
-    ctx.fillText('SWR', 2, swrTickY);
+    drawMeterRowLabel(ctx, face.label, 2, auxTickY, fs, barX - 4);
 
     // --- Numeric readouts (left column, beside each bar) ---
     var vfs = Math.min(fs, segH);
@@ -4017,7 +4484,7 @@ function drawTxMeters(ctx, cw, ch, barX, barW) {
     ctx.textBaseline = 'middle';
     ctx.fillStyle = '#fff';
     ctx.fillText(Math.round(powerVal) + 'W', 2, poSegY + segH / 2 + 1);
-    ctx.fillText(swrVal.toFixed(1), 2, swrSegY + segH / 2 + 1);
+    ctx.fillText(face.text(auxVal), 2, auxSegY + segH / 2 + 1);
 
     // --- Po scale: 0 25 50 above the bar, 100% at the right end ---
     var poMarks = (barW >= 160)
@@ -4058,52 +4525,30 @@ function drawTxMeters(ctx, cw, ch, barX, barW) {
     ctx.fillStyle = METER_BASELINE;
     ctx.fillRect(barX, poLineY, barW, 1);
 
-    // --- SWR tile bar (blue to the 3 mark, red in the over-3 zone) ---
-    // Fill tracks the printed scale: linear 1..3 over the left 2/3,
-    // 3..6 compressed into the red zone toward ∞.
-    var swrFrac = (swrVal <= 3) ? (swrVal - 1) * 0.33
-                                : 0.66 + (swrVal - 3) * (0.34 / 3);
-    var swrFill = Math.round(Math.min(1, Math.max(0, swrFrac)) * tiles);
-    var warnTile = Math.round(0.66 * tiles);
-    if (swrFill >= txSwrPeakCount || now - txSwrPeakTs > METER_PEAK_HOLD_MS) {
-        txSwrPeakCount = swrFill;
-        txSwrPeakTs = now;
+    // --- Selected meter's tile bar (blue, red past the radio's red line) ---
+    var auxFill = Math.round(Math.min(1, Math.max(0, face.frac(auxVal))) * tiles);
+    var warnTile = (face.redFrac === null) ? tiles : Math.round(face.redFrac * tiles);
+    if (auxFill >= txAuxPeakCount || now - txAuxPeakTs > METER_PEAK_HOLD_MS) {
+        txAuxPeakCount = auxFill;
+        txAuxPeakTs = now;
     }
     for (var j = 0; j < tiles; j++) {
-        var jon = (j < swrFill) || (j === txSwrPeakCount - 1);
+        var jon = (j < auxFill) || (j === txAuxPeakCount - 1);
         ctx.fillStyle = jon ? (j <= warnTile ? METER_BLUE : METER_RED) : METER_DARK;
-        ctx.fillRect(barX + j * pitch + gap / 2, swrSegY, tileW, segH);
+        ctx.fillRect(barX + j * pitch + gap / 2, auxSegY, tileW, segH);
     }
     ctx.fillStyle = METER_BASELINE;
-    ctx.fillRect(barX, swrLineY, barW, 1);
+    ctx.fillRect(barX, auxLineY, barW, 1);
 
-    // --- SWR scale below the bar (same face as RX) ---
-    var swrMarks = (barW >= 220)
-        ? [['1', 0], ['1.5', 0.165], ['2', 0.33], ['2.5', 0.5], ['3', 0.66]]
-        : [['1', 0], ['2', 0.33], ['3', 0.66]];
-    ctx.font = fs + 'px system-ui, sans-serif';
-    for (var m = 0; m < swrMarks.length; m++) {
-        var mx = barX + swrMarks[m][1] * barW;
-        ctx.fillStyle = '#aaa';
-        ctx.fillRect(Math.round(mx) - 0.5, swrTickY, 1, tickH - 1);
-        ctx.fillStyle = '#ccc';
-        ctx.textAlign = (m === 0) ? 'left' : 'center';
-        ctx.fillText(swrMarks[m][0], (m === 0) ? mx - 1 : mx, swrNumY);
-    }
-    // red over-3 zone ticks + infinity at the right end
-    ctx.fillStyle = METER_SCALE_RED;
-    for (var rz = 0.73; rz <= 0.92; rz += 0.063)
-        ctx.fillRect(Math.round(barX + rz * barW) - 0.5, swrTickY, 1, tickH - 1);
-    ctx.textAlign = 'right';
-    ctx.fillStyle = '#ccc';
-    ctx.fillText('∞', barX + barW, swrNumY);
+    // --- Selected meter's scale below the bar (same face as RX) ---
+    drawTxMeterScale(ctx, barX, barW, auxTickY, auxNumY, fs, tickH, face);
 
     // ALC readout — visible during DIGI TX or FreeDV TX (drives auto-gain)
     if (digiTxActive || digiTuneActive || (freedvEnabled && micEnabled && isTransmitting)) {
         ctx.fillStyle = alcVal > 0.05 ? '#ff4444' : '#44cc44';
         ctx.font = 'bold 9px system-ui, sans-serif';
         ctx.textAlign = 'right';
-        ctx.fillText('ALC ' + Math.round(alcVal * 100) + '%', barX + barW - 12, swrNumY);
+        ctx.fillText('ALC ' + Math.round(alcVal * 100) + '%', barX + barW - 12, auxNumY);
     }
 }
 
@@ -4194,7 +4639,7 @@ function getBottomButtons() {
         case 'mode':
         case 'band':
         case 'func':
-
+        case 'span':
         case 'gain':
             return [
                 { label: 'MODE', active: currentPanel === 'mode', action: function() { setPanel('mode'); } },
@@ -4205,7 +4650,6 @@ function getBottomButtons() {
                 { label: isCW ? 'KEY' : 'PTT', txActive: isTransmitting, cls: isCW ? 'key-btn' : 'ptt-btn', disabled: currentPanel !== 'default', action: currentPanel !== 'default' ? null : (isCW ? toggleCWBar : function() { handlePTTPress(); }) }
             ];
         case 'audiomiс':
-        case 'span':
         case 'freqinp':
         case 'memory':
             return [
@@ -5108,14 +5552,9 @@ function renderSpanOverlay() {
         var btn = document.createElement('button');
         btn.className = 'ov-btn' + (i === currentSpanIndex ? ' active' : '');
         btn.textContent = availableSpans[i].name;
-        btn.onclick = (function(idx) { return function() { setSpan(idx); setPanel('default'); }; })(i);
+        btn.onclick = (function(idx) { return function() { setSpan(idx); }; })(i);
         grid.appendChild(btn);
     }
-    var back = document.createElement('button');
-    back.className = 'ov-btn back-btn';
-    back.innerHTML = '&#x21A9;';
-    back.onclick = function() { setPanel('scope'); };
-    grid.appendChild(back);
     document.getElementById('spanOverlay').classList.add('visible');
 }
 
@@ -5596,6 +6035,18 @@ function equalizeVFO() { send({ cmd: 'equalizeVFO' }); }
 function toggleSplit() { send({ cmd: 'setSplit', value: !isSplit }); }
 function togglePower() {
     if (rigPoweredOn) {
+        var note = document.getElementById('powerConfirmNote');
+        if (note) {
+            if (powerOnNeedsRemoteJack) {
+                note.textContent = 'The ' + (rigModelName || 'radio') + ' only accepts the power-on '
+                    + 'command on its [REMOTE] jack, and its USB port goes dead in standby. '
+                    + 'Unless wfweb is wired to [REMOTE], you will not be able to switch the radio '
+                    + 'back on from here \u2014 you will have to press POWER on the radio itself.';
+                note.classList.add('visible');
+            } else {
+                note.classList.remove('visible');
+            }
+        }
         document.getElementById('powerConfirm').classList.add('visible');
     } else {
         doPowerOn();
@@ -6106,16 +6557,144 @@ function flushAudio() {
 // ============================================================
 // SPECTRUM / WATERFALL
 // ============================================================
+// The rig's wave data is on a fixed log scale: 0..spectAmpMax counts cover
+// about 45 dB (IC-7300, measured: the 20 dB attenuator moves every count by
+// ~72), and the reference level does NOT move the streamed counts. So the
+// browser applies the REF shift itself and the picture matches the rig's
+// screen: the REF-shifted floor is the trace baseline and the palette floor.
+var SPECT_DB_SPAN = 45;
+var WF_FLOOR_T = 0.10;           // where the noise floor sits on the LUT ramp (near-black navy)
+var WF_WINDOW_DB = 15;           // dB from the floor to white — the rig's waterfall ramp is this steep
+var SPECT_HOLD_MS = 4500;        // how long a peak stays in the grey hold ghost
+var WF_LUT_MAX = 160;
+
+function spectCountsPerDb() { return spectAmpMax / SPECT_DB_SPAN; }
+
+// Waterfall palette: the floor is a deep navy (only below-floor dips darken
+// further), signals climb through blue and cyan into near-white peaks.
 function buildColorTable() {
-    colorTable = new Array(256);
-    for (var i = 0; i < 256; i++) {
-        var v = i / 255; var r, g, b;
-        if (v < 0.25) { r = 0; g = Math.round(255 * (v / 0.25)); b = 255; }
-        else if (v < 0.5) { r = 0; g = 255; b = Math.round(255 * (1 - (v - 0.25) / 0.25)); }
-        else if (v < 0.75) { r = Math.round(255 * ((v - 0.5) / 0.25)); g = 255; b = 0; }
-        else { r = 255; g = Math.round(255 * (1 - (v - 0.75) / 0.25)); b = 0; }
-        colorTable[i] = [r, g, b];
+    var stops = [
+        [0.00, [1, 3, 18]],
+        [0.20, [8, 18, 76]],
+        [0.50, [28, 84, 216]],
+        [0.72, [63, 184, 232]],
+        [0.88, [150, 214, 240]],
+        [1.00, [242, 250, 255]]
+    ];
+    colorTable = new Array(WF_LUT_MAX + 1);
+    for (var i = 0; i <= WF_LUT_MAX; i++) {
+        var t = i / WF_LUT_MAX, upper = stops.length - 1;
+        for (var k = 0; k < stops.length; k++) { if (stops[k][0] >= t) { upper = k; break; } }
+        if (upper === 0) { colorTable[i] = stops[0][1].slice(); continue; }
+        var t0 = stops[upper - 1][0], c0 = stops[upper - 1][1];
+        var t1 = stops[upper][0], c1 = stops[upper][1];
+        var f = (t - t0) / (t1 - t0);
+        colorTable[i] = [
+            (c0[0] + (c1[0] - c0[0]) * f) | 0,
+            (c0[1] + (c1[1] - c0[1]) * f) | 0,
+            (c0[2] + (c1[2] - c0[2]) * f) | 0
+        ];
     }
+}
+
+// The REF shift the waterfall palette applies. On rigs whose stream already
+// carries the reference level (the IC-705's LAN stream) a manual REF renders
+// unshifted: the rig moved the counts, shifting again doubles the effect.
+function scopeDisplayRefDb() {
+    if (scopeRefDb === null) return wfAutoRefDb;
+    return /705/.test(rigModelName) ? 0 : scopeRefDb;
+}
+
+// The spectrum trace follows a manual REF only faintly: on the rig the
+// waterfall brightness takes the full shift while the trace barely moves.
+// AUTO commands 0 dB to the rig, so the trace is the rig's own picture.
+var SPECT_REF_GAIN = 0.25;
+function spectRefShiftDb() {
+    if (scopeRefDb === null) return 0;
+    return /705/.test(rigModelName) ? 0 : scopeRefDb * SPECT_REF_GAIN;
+}
+
+// Palette index for one wave-data count: the REF-shifted floor paints the
+// palette's floor pin and the ramp climbs linearly count-for-dB through
+// WF_WINDOW_DB; below-floor dips are compressed toward black.
+function wfColorIndex(amp) {
+    var cpd = spectCountsPerDb();
+    var u = (amp + scopeDisplayRefDb() * cpd) / (WF_WINDOW_DB * cpd);
+    var shaped = u < 0 ? -Math.pow(-u, 1.6) : u;
+    var ci = ((WF_FLOOR_T + shaped * (1 - WF_FLOOR_T)) * WF_LUT_MAX) | 0;
+    return ci < 0 ? 0 : (ci > WF_LUT_MAX ? WF_LUT_MAX : ci);
+}
+
+function wfFillBlank(d, from, to) {
+    var c = colorTable[0];
+    for (var i = from; i < to; i += 4) { d[i] = c[0]; d[i+1] = c[1]; d[i+2] = c[2]; d[i+3] = 255; }
+}
+
+function loadScopeSettings() {
+    try {
+        var t = localStorage.getItem('wfTracking');
+        if (t === 'track' || t === 'fixed') wfTracking = t;
+        var r = localStorage.getItem('wfScopeRef');
+        if (r !== null && r !== '') {
+            var v = parseFloat(r);
+            if (!isNaN(v)) scopeRefDb = Math.max(-20, Math.min(20, v));
+        }
+        var sp = localStorage.getItem('wfSpeed');
+        if (WF_SPEED_ROWS[sp]) wfSpeed = sp;
+    } catch (e) {}
+    setWfTracking(wfTracking, true);
+    setWfSpeed(wfSpeed, true);
+    updateScopeRefUi();
+}
+
+// Waterfall speed: rows per sweep here, and the rig's own scope speed
+// (0x27 0x1A) so its screen scrolls at the same pace.
+function setWfSpeed(sp, quiet) {
+    wfSpeed = WF_SPEED_ROWS[sp] ? sp : 'mid';
+    var ids = { slow: 'wfSpeedSlowBtn', mid: 'wfSpeedMidBtn', fast: 'wfSpeedFastBtn' };
+    for (var k in ids) { var b = document.getElementById(ids[k]); if (b) b.classList.toggle('active', k === wfSpeed); }
+    if (quiet) return;
+    try { localStorage.setItem('wfSpeed', wfSpeed); } catch (e) {}
+    send({ cmd: 'setScopeSpeed', value: WF_SPEED_CIV[wfSpeed] });
+}
+
+function setWfTracking(mode, quiet) {
+    wfTracking = mode === 'track' ? 'track' : 'fixed';
+    var fb = document.getElementById('wfTrackFixedBtn'), tb = document.getElementById('wfTrackTrackBtn');
+    if (fb) fb.classList.toggle('active', wfTracking === 'fixed');
+    if (tb) tb.classList.toggle('active', wfTracking === 'track');
+    // FIXED: nothing slides and nothing pauses, even mid-drag.
+    if (wfTracking === 'fixed') { scopeSetVisualPan(0); scopeFreezeDuringDrag = false; }
+    if (!quiet) { try { localStorage.setItem('wfTracking', wfTracking); } catch (e) {} }
+}
+
+// REF: null = AUTO (the rig sits at 0.0 dB and the browser dials the
+// reference itself from the noise floor). A value pins the shift and is
+// commanded to the rig (0x27 0x19, tenths of a dB) so its screen matches.
+function setScopeRef(db) {
+    scopeRefDb = (db === null || db === undefined) ? null : Math.max(-20, Math.min(20, db));
+    try {
+        if (scopeRefDb === null) localStorage.removeItem('wfScopeRef');
+        else localStorage.setItem('wfScopeRef', String(scopeRefDb));
+    } catch (e) {}
+    send({ cmd: 'setScopeRef', value: Math.round((scopeRefDb || 0) * 10) });
+    updateScopeRefUi();
+}
+function stepScopeRef(dir) { setScopeRef((scopeRefDb || 0) + dir * 2.5); }
+// Re-command the browser's scope picks when the rig (re)connects: the
+// rig's own values survive a wfweb restart, ours have to be put back.
+function scopeRigAssert() {
+    if (scopeRefDb !== null) send({ cmd: 'setScopeRef', value: Math.round(scopeRefDb * 10) });
+    send({ cmd: 'setScopeSpeed', value: WF_SPEED_CIV[wfSpeed] });
+}
+function updateScopeRefUi() {
+    var val = document.getElementById('scopeRefValue');
+    if (val) {
+        val.textContent = scopeRefDb === null ? 'AUTO'
+            : (scopeRefDb > 0 ? '+' : '') + scopeRefDb.toFixed(1) + ' dB';
+    }
+    var auto = document.getElementById('scopeRefAutoBtn');
+    if (auto) auto.classList.toggle('active', scopeRefDb === null);
 }
 
 function resizeCanvases() {
@@ -6125,11 +6704,26 @@ function resizeCanvases() {
     var areaRect = area.getBoundingClientRect();
     if (areaRect.width <= 0 || areaRect.height <= 0) return;
 
-    var spectH = Math.round(areaRect.height * 0.35);
-    var wfH = Math.round(areaRect.height * 0.65);
+    // The CW bar is bottom-anchored over the scope area, so lay the
+    // spectrum + waterfall out in the strip above it — otherwise the
+    // waterfall is buried under the decoder and you can't tap-tune while
+    // decoding. The bar caps itself at 65% of the area (CSS), so the scope
+    // always keeps at least the top 35%.
+    var availH = areaRect.height;
+    var cwBar = document.getElementById('cwBar');
+    if (cwBar && !cwBar.classList.contains('hidden')) {
+        availH = Math.max(areaRect.height * 0.35, areaRect.height - cwBar.getBoundingClientRect().height);
+    }
+    var spectH = Math.round(availH * 0.35);
+    var wfH = Math.round(availH * 0.65);
     spectCanvas.style.height = spectH + 'px';
     wfCanvas.style.top = spectH + 'px';
     wfCanvas.style.height = wfH + 'px';
+    // Span edge labels hug the spectrum/waterfall boundary (CSS puts them at
+    // 35% of the area; that's wrong once the strip shrinks above the CW bar).
+    var seL = document.getElementById('spanEdgeLeft'), seR = document.getElementById('spanEdgeRight');
+    if (seL) seL.style.top = spectH + 'px';
+    if (seR) seR.style.top = spectH + 'px';
     spectCanvas.width = Math.round(areaRect.width);
     spectCanvas.height = spectH;
     wfCanvas.width = Math.round(areaRect.width);
@@ -6139,15 +6733,33 @@ function resizeCanvases() {
     drawMeter();
 }
 
+// The CW bar's height changes when it opens/closes or its header wraps;
+// the scope strip above it has to follow (see resizeCanvases).
+(function () {
+    var cwBar = document.getElementById('cwBar');
+    if (cwBar && window.ResizeObserver) {
+        new ResizeObserver(function () { resizeCanvases(); }).observe(cwBar);
+    }
+})();
+
 function initWaterfallBuffer(dataLen) {
     var wfCanvas = document.getElementById('waterfallCanvas');
     var h = wfCanvas.height || 200;
+    var prevImage = wfImageData;
     wfOffCanvas = document.createElement('canvas');
     wfOffCanvas.width = dataLen; wfOffCanvas.height = h;
     wfOffCtx = wfOffCanvas.getContext('2d');
     wfImageData = wfOffCtx.createImageData(dataLen, h);
-    var d = wfImageData.data;
-    for (var i = 3; i < d.length; i += 4) d[i] = 255;
+    wfFillBlank(wfImageData.data, 0, wfImageData.data.length);
+    // Carry the history over when only the strip's height changed (opening
+    // or closing the CW bar resizes the scope area, and so does any window
+    // resize) — new sweeps land at row 0, so a top-aligned copy keeps the
+    // waterfall continuous instead of blanking it on every panel toggle.
+    if (prevImage && prevImage.width === dataLen) {
+        var rows = Math.min(prevImage.height, h);
+        wfImageData.data.set(prevImage.data.subarray(0, rows * dataLen * 4), 0);
+    }
+    wfBufDirty = true;
 }
 
 function handleBinaryMessage(buffer) {
@@ -6183,6 +6795,8 @@ function handleBinaryMessage(buffer) {
 
     shiftWaterfallForFreqChange();
     updateWaterfallRow();
+    spectUpdateHold();
+    spectBeginTween();
     if (!spectRenderPending) { spectRenderPending = true; requestAnimationFrame(renderScope); }
 }
 
@@ -6190,13 +6804,22 @@ function shiftWaterfallForFreqChange() {
     if (!wfImageData || prevSpectStartFreq === 0 || prevSpectEndFreq === 0) return;
     var curSpan = spectEndFreq - spectStartFreq;
     if (curSpan <= 0) return;
-    var shiftPixels = Math.round((prevSpectStartFreq - spectStartFreq) / curSpan * wfImageData.width);
-    if (shiftPixels === 0) return;
     var w = wfImageData.width, d = wfImageData.data, rowBytes = w * 4;
+    wfBufDirty = true;
+    if (Math.abs((prevSpectEndFreq - prevSpectStartFreq) - curSpan) > curSpan * 1e-3) {
+        // Span changed: the history is at another scale, start over like the rig does.
+        wfFillBlank(d, 0, d.length);
+        return;
+    }
+    // FIXED leaves the history where it was painted (the rig's own behaviour);
+    // only TRACK pans it so the frequencies still in view stay aligned.
+    if (wfTracking !== 'track') return;
+    var shiftPixels = Math.round((prevSpectStartFreq - spectStartFreq) / curSpan * w);
+    if (shiftPixels === 0) return;
     var absShift = Math.min(Math.abs(shiftPixels), w);
     if (absShift >= w) {
         // Frequency jumped too far — clear entire waterfall
-        for (var i = 0; i < d.length; i += 4) { d[i] = 0; d[i+1] = 0; d[i+2] = 0; d[i+3] = 255; }
+        wfFillBlank(d, 0, d.length);
         return;
     }
     var h = wfImageData.height;
@@ -6205,55 +6828,131 @@ function shiftWaterfallForFreqChange() {
         if (shiftPixels < 0) {
             // Tuned up: old data shifts left, blank on right
             d.copyWithin(rs, rs + absShift * 4, rs + rowBytes);
-            for (var i = rs + (w - absShift) * 4; i < rs + rowBytes; i += 4) { d[i] = 0; d[i+1] = 0; d[i+2] = 0; d[i+3] = 255; }
+            wfFillBlank(d, rs + (w - absShift) * 4, rs + rowBytes);
         } else {
             // Tuned down: old data shifts right, blank on left
             d.copyWithin(rs + absShift * 4, rs, rs + (w - absShift) * 4);
-            for (var i = rs; i < rs + absShift * 4; i += 4) { d[i] = 0; d[i+1] = 0; d[i+2] = 0; d[i+3] = 255; }
+            wfFillBlank(d, rs, rs + absShift * 4);
         }
     }
 }
 
-// Automatic waterfall reference level. The rig's scope amplitudes are
-// log-scaled and the per-bin noise floor rises with span, so a fixed
-// amp->color map saturates to yellow at wide spans. Anchor the palette to
-// the measured noise floor instead: each row's floor (25th percentile,
-// EMA-smoothed) maps to a fixed deep-blue index and signals color by
-// strength above it, which is span-independent.
-var wfAutoFloor = -1;
-var WF_FLOOR_CI = 24; // color index the noise floor maps to
-
-function wfEstimateFloor() {
-    var hist = new Uint32Array(256), len = spectData.length;
+// AUTO reference level: the REF an operator would have dialed to seat the
+// noise floor on the palette floor, in the rig's own 2.5 dB steps. The
+// per-bin noise floor rises with span (median jumps ~8 -> 64 counts from
+// 2.5 kHz to 500 kHz), so the tracked floor snaps on big jumps and is
+// otherwise EMA-smoothed; the pick itself is re-dialed only once the floor
+// has drifted past what sweep jitter explains, so the picture holds still.
+function wfUpdateAutoRef() {
+    var len = spectData.length;
+    if (!len) return;
+    var hist = new Uint32Array(256);
     for (var i = 0; i < len; i++) hist[spectData[i]]++;
-    var target = len >> 2, acc = 0;
-    for (var v = 0; v < 256; v++) { acc += hist[v]; if (acc >= target) return v; }
-    return 0;
+    var target = Math.max(1, (len * 15 / 100) | 0), acc = 0, floorNow = 0;
+    for (var v = 0; v < 256; v++) { acc += hist[v]; if (acc >= target) { floorNow = v; break; } }
+    if (!wfFloorCalibrated || Math.abs(floorNow - wfEmaFloor) > 15) { wfEmaFloor = floorNow; wfFloorCalibrated = true; }
+    else wfEmaFloor += (floorNow - wfEmaFloor) * 0.08;
+    var wanted = -wfEmaFloor / spectCountsPerDb();
+    if (!wfAutoRefCalibrated || Math.abs(wanted - wfAutoRefDb) > 4) {
+        wfAutoRefDb = Math.round(wanted / 2.5) * 2.5;
+        wfAutoRefCalibrated = true;
+    }
 }
 
 function updateWaterfallRow() {
     if (!wfImageData || !spectData) return;
-    var floorNow = wfEstimateFloor();
-    if (wfAutoFloor < 0 || Math.abs(floorNow - wfAutoFloor) > 20) wfAutoFloor = floorNow;
-    else wfAutoFloor += (floorNow - wfAutoFloor) * 0.1;
-    var scale = 255 / spectAmpMax;
-    var w = wfImageData.width, d = wfImageData.data;
-    d.copyWithin(w * 4, 0, d.length - w * 4);
-    for (var i = 0; i < w; i++) {
-        var amp = i < spectData.length ? spectData[i] : 0;
-        var ci = Math.round((amp - wfAutoFloor) * scale) + WF_FLOOR_CI;
-        if (ci < 0) ci = 0; else if (ci > 255) ci = 255;
-        var c = colorTable[ci];
-        var idx = i * 4;
-        d[idx] = c[0]; d[idx+1] = c[1]; d[idx+2] = c[2]; d[idx+3] = 255;
+    wfUpdateAutoRef();
+    var w = wfImageData.width, d = wfImageData.data, len = spectData.length;
+    // SPEED: n rows per sweep. Row 0 is the new sweep; the rows under it
+    // blend toward the previous sweep so the scroll stays smooth.
+    var n = Math.max(1, Math.min(WF_SPEED_ROWS[wfSpeed] || 1, wfImageData.height));
+    var prev = (wfPrevSweep && wfPrevSweep.length === len) ? wfPrevSweep : null;
+    d.copyWithin(w * 4 * n, 0, d.length - w * 4 * n);
+    for (var row = 0; row < n; row++) {
+        var alpha = (n - row) / n, rs = row * w * 4;
+        for (var i = 0; i < w; i++) {
+            var amp = i < len ? spectData[i] : 0;
+            if (row > 0 && prev && i < len) amp = prev[i] + (amp - prev[i]) * alpha;
+            var c = colorTable[wfColorIndex(amp)];
+            var idx = rs + i * 4;
+            d[idx] = c[0]; d[idx+1] = c[1]; d[idx+2] = c[2]; d[idx+3] = 255;
+        }
     }
+    wfPrevSweep = new Uint8Array(spectData);
+    wfScrollRows = n;
+    wfBufDirty = true;
+}
+
+// Grey afterglow behind the trace: per-bin maxima of the last few seconds
+// of sweeps, so a signal that keys up leaves a ghost where it stood until
+// the hold time ages it out. Reset when the window moves.
+function spectUpdateHold() {
+    var now = performance.now();
+    if (spectHoldStart !== spectStartFreq || spectHoldEnd !== spectEndFreq ||
+        (spectHold.length && spectHold[spectHold.length - 1].data.length !== spectData.length)) {
+        spectHold.length = 0;
+        spectHoldStart = spectStartFreq; spectHoldEnd = spectEndFreq;
+    }
+    spectHold.push({ t: now, data: new Uint8Array(spectData) });
+    while (spectHold.length && now - spectHold[0].t > SPECT_HOLD_MS) spectHold.shift();
+}
+
+// Start easing the drawn trace from where it is toward the sweep that just
+// arrived. A moved window (tune, span) snaps instead — easing across a QSY
+// would smear signals sideways.
+function spectBeginTween() {
+    var now = performance.now(), len = spectData.length;
+    if (spectLastSweepAt) {
+        var gap = Math.max(40, Math.min(500, now - spectLastSweepAt));
+        scopeSweepGapMs += (gap - scopeSweepGapMs) * 0.3;
+    }
+    spectTweenMs = Math.max(60, Math.min(300, scopeSweepGapMs * 0.85));
+    spectLastSweepAt = now;
+    var jump = !spectShown || spectShown.length !== len ||
+        spectStartFreq !== prevSpectStartFreq || spectEndFreq !== prevSpectEndFreq;
+    if (jump) {
+        spectShown = Float32Array.from(spectData);
+        spectFrom = Float32Array.from(spectData);
+        spectTweenStart = 0;
+        return;
+    }
+    spectFrom.set(spectShown);
+    spectTweenStart = now;
+}
+
+// Advance the ease: returns true while there is still motion to draw.
+function spectAdvanceTween() {
+    var len = spectData.length;
+    if (!spectShown || spectShown.length !== len) { spectShown = Float32Array.from(spectData); return false; }
+    if (!spectTweenStart) { spectShown.set(spectData); return false; }
+    var t = (performance.now() - spectTweenStart) / spectTweenMs;
+    if (t >= 1) { spectShown.set(spectData); spectTweenStart = 0; return false; }
+    var e = t * (2 - t); // ease-out
+    for (var i = 0; i < len; i++) spectShown[i] = spectFrom[i] + (spectData[i] - spectFrom[i]) * e;
+    return true;
+}
+
+// Animation between sweeps: the trace eases and the waterfall slides.
+// Runs only while either is still in motion.
+function scopeScheduleAnim() {
+    if (spectTweenPending) return;
+    spectTweenPending = true;
+    requestAnimationFrame(scopeAnimFrame);
+}
+function scopeAnimFrame() {
+    spectTweenPending = false;
+    if (spectRenderPending || !spectData || !spectData.length) return; // a full render is coming anyway
+    var more = drawSpectrum();
+    if (drawWaterfall()) more = true;
+    if (more) scopeScheduleAnim();
 }
 
 function renderScope() {
     spectRenderPending = false;
     if (!spectData || spectData.length === 0) return;
-    drawSpectrum();
-    drawWaterfall();
+    var more = drawSpectrum();
+    if (drawWaterfall()) more = true;
+    if (more) scopeScheduleAnim();
 }
 
 function drawSpectrum() {
@@ -6263,35 +6962,58 @@ function drawSpectrum() {
     var labelH = 14, plotH = h - labelH;
 
     ctx.clearRect(0, 0, w, h);
-    ctx.fillStyle = '#050510';
+    ctx.fillStyle = '#05070c';
     ctx.fillRect(0, 0, w, h);
 
-    // Grid
-    ctx.strokeStyle = 'rgba(255,255,255,0.04)';
-    ctx.lineWidth = 1;
-    for (var gi = 1; gi < 4; gi++) {
-        var gy = (plotH / 4) * gi;
-        ctx.beginPath(); ctx.moveTo(0, gy); ctx.lineTo(w, gy); ctx.stroke();
-    }
-
-    // Fill
-    ctx.beginPath(); ctx.moveTo(0, plotH);
-    for (var i = 0; i < len; i++) {
-        ctx.lineTo((i / (len - 1)) * w, plotH - (spectData[i] / spectAmpMax) * plotH);
-    }
-    ctx.lineTo(w, plotH); ctx.closePath();
-    ctx.fillStyle = 'rgba(0, 200, 200, 0.08)';
-    ctx.fill();
-
-    // Line
+    // Faint grid, like the rig's scope
+    ctx.strokeStyle = 'rgba(150,171,191,0.10)';
+    ctx.lineWidth = 0.7;
     ctx.beginPath();
-    for (var j = 0; j < len; j++) {
-        var lx = (j / (len - 1)) * w, ly = plotH - (spectData[j] / spectAmpMax) * plotH;
-        if (j === 0) ctx.moveTo(lx, ly); else ctx.lineTo(lx, ly);
-    }
-    ctx.strokeStyle = '#0bb';
-    ctx.lineWidth = 1.2;
+    for (var gi = 1; gi < 3; gi++) { var gy = (plotH / 3) * gi; ctx.moveTo(0, gy); ctx.lineTo(w, gy); }
+    for (var gx = 1; gx < 8; gx++) { var gxx = (w / 8) * gx; ctx.moveTo(gxx, 0); ctx.lineTo(gxx, plotH); }
     ctx.stroke();
+
+    // Y scale: the rig's fixed scale (spectAmpMax counts ≈ 45 dB), with
+    // the tracked noise floor seated AT the axis like the rig's own trace:
+    // the lower half of the band noise sits below it, only the noise peaks
+    // poke up as grass with dark gaps between them, and a manual REF
+    // nudges the whole thing (see spectRefShiftDb). Bars rise from the
+    // axis — nothing solid is painted under the grass.
+    var floor = wfEmaFloor + 2 - spectRefShiftDb() * spectCountsPerDb();
+    var stepX = w / len;
+    function barY(amp) {
+        var t = (amp - floor) / spectAmpMax;
+        if (t < 0) t = 0; else if (t > 1) t = 1;
+        return plotH * (1 - 0.94 * t);
+    }
+
+    // Grey peak-hold afterglow behind the trace
+    if (spectHold.length > 1) {
+        ctx.fillStyle = 'rgba(102,112,122,0.55)';
+        ctx.beginPath();
+        for (var hi = 0; hi < len; hi++) {
+            var peak = 0;
+            for (var hs = 0; hs < spectHold.length; hs++) {
+                var hd = spectHold[hs].data;
+                if (hd.length === len && hd[hi] > peak) peak = hd[hi];
+            }
+            var hy = barY(peak);
+            ctx.rect(hi * stepX, hy, stepX, plotH - hy);
+        }
+        ctx.fill();
+    }
+
+    // The live sweep, one solid bar per bin like the rig's own trace — the
+    // bar texture IS the per-bin grass. Eased toward the newest sweep
+    // between arrivals (spectAdvanceTween); no smoothing across bins.
+    var easing = spectAdvanceTween();
+    ctx.fillStyle = 'rgb(237,242,247)';
+    ctx.beginPath();
+    for (var i = 0; i < len; i++) {
+        var by = barY(spectShown[i]);
+        ctx.rect(i * stepX, by, stepX, plotH - by);
+    }
+    ctx.fill();
 
     // Passband indicator bar (anchored to spectrum center, independent of currentFreq)
     if (currentFilterWidth > 0 && spectStartFreq > 0 && spectEndFreq > spectStartFreq) {
@@ -6347,16 +7069,26 @@ function drawSpectrum() {
             ctx.fillText(label, frac * w, plotH + 2);
         }
     }
+    return easing;
 }
 
 function drawWaterfall() {
-    if (!wfImageData || !wfOffCtx) return;
+    if (!wfImageData || !wfOffCtx) return false;
     var canvas = document.getElementById('waterfallCanvas');
     var ctx = canvas.getContext('2d');
     var w = canvas.width, h = canvas.height;
-    wfOffCtx.putImageData(wfImageData, 0, 0);
-    ctx.imageSmoothingEnabled = false;
-    ctx.drawImage(wfOffCanvas, 0, 0, w, h);
+    if (wfBufDirty) { wfOffCtx.putImageData(wfImageData, 0, 0); wfBufDirty = false; }
+    // Slide: how far into the current sweep interval we are decides how far
+    // down the picture has drifted (0 .. rows-per-sweep). Bilinear so the
+    // sub-pixel motion is real, not a snap to whole device pixels.
+    var p = spectLastSweepAt ? (performance.now() - spectLastSweepAt) / scopeSweepGapMs : 1;
+    if (p > 1) p = 1; else if (p < 0) p = 0;
+    var offset = p * wfScrollRows * (h / wfImageData.height);
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(wfOffCanvas, 0, offset, w, h);
+    // The strip uncovered at the top is the newest row, stretched: it grows
+    // until the next sweep's rows replace it in place.
+    if (offset > 0) ctx.drawImage(wfOffCanvas, 0, 0, wfImageData.width, 1, 0, 0, w, offset + 0.5);
 
     // Passband indicator bar (anchored to spectrum center)
     if (currentFilterWidth > 0 && spectStartFreq > 0 && spectEndFreq > spectStartFreq) {
@@ -6390,12 +7122,7 @@ function drawWaterfall() {
         ctx.lineWidth = 1;
         ctx.beginPath(); ctx.moveTo(xPos, 0); ctx.lineTo(xPos, h); ctx.stroke();
     }
-
-}
-
-function scopeGesturesBlocked() {
-    var isMobilePortrait = window.matchMedia('(orientation: portrait) and (max-width: 600px)').matches;
-    return isMobilePortrait && !document.getElementById('cwBar').classList.contains('hidden');
+    return p < 1;
 }
 
 function scopeFreqFromClientX(target, clientX) {
@@ -6433,20 +7160,17 @@ function scopeIndicatorCenterX(w) {
 }
 
 function scopeClick(e) {
-    if (scopeGesturesBlocked()) return;
     var freqHz = scopeFreqFromClientX(e.target, e.clientX);
     if (freqHz > 0) send({ cmd: 'setFrequency', value: freqHz });
 }
 
 function scopeWheel(e) {
-    if (scopeGesturesBlocked()) return;
 
     e.preventDefault();
     if (e.deltaY < 0) tuneUp(); else tuneDown();
 }
 
 function scopePointerDown(e) {
-    if (scopeGesturesBlocked()) return;
     if (spectStartFreq <= 0 || spectEndFreq <= spectStartFreq) return;
     if (typeof e.button === 'number' && e.button !== 0) return;
 
@@ -6465,7 +7189,10 @@ function scopePointerDown(e) {
     scopeDragRectLeft = rect.left;
     scopeDragRectWidth = rect.width;
     scopeSetVisualPan(0);
-    scopeFreezeDuringDrag = true;
+    // TRACK grabs the band: the canvases slide under the finger and the
+    // sweeps pause until release. FIXED is the rig's glass — it never moves
+    // and never stops, the drag only turns the dial.
+    scopeFreezeDuringDrag = (wfTracking === 'track');
 
     if (scopeDragCanvas.setPointerCapture) {
         try { scopeDragCanvas.setPointerCapture(e.pointerId); } catch (err) {}
@@ -6489,7 +7216,7 @@ function scopePointerMove(e) {
         scopeDragMoved = true;
     }
 
-    scopeSetVisualPan(deltaX);
+    if (wfTracking === 'track') scopeSetVisualPan(deltaX);
 
     if (scopeDragMoved) {
         if (now - scopeDragLastTuneTime >= 35) {
@@ -6760,6 +7487,52 @@ function hideMacroEditor() {
 // CW transmission state
 var cwTransmitStartTime = 0; // Wall-clock time when current CW transmission started
 
+// Morse patterns for the TX progress transcript.  The radio's own memory keyer
+// does the keying (CI-V 0x17); this table only times the character highlighting,
+// so it has to agree with what the rig will actually send.
+//
+// Prosigns are typed <AR> / <SK> / ... in the input box and count as ONE unit
+// here.  cwToRig() rewrites them to the Icom keyer's "^XX" form, which sends the
+// two letters with no inter-character space.
+var CW_MORSE = {
+    'A': '.-', 'B': '-...', 'C': '-.-.', 'D': '-..', 'E': '.', 'F': '..-.',
+    'G': '--.', 'H': '....', 'I': '..', 'J': '.---', 'K': '-.-', 'L': '.-..',
+    'M': '--', 'N': '-.', 'O': '---', 'P': '.--.', 'Q': '--.-', 'R': '.-.',
+    'S': '...', 'T': '-', 'U': '..-', 'V': '...-', 'W': '.--', 'X': '-..-',
+    'Y': '-.--', 'Z': '--..', '0': '-----', '1': '.----', '2': '..---',
+    '3': '...--', '4': '....-', '5': '.....', '6': '-....', '7': '--...',
+    '8': '---..', '9': '----.', '.': '.-.-.-', ',': '--..--', '?': '..--..',
+    '/': '-..-.', '=': '-...-', '+': '.-.-.', ' ': ' ',
+    '<AR>': '.-.-.', '<AS>': '.-...', '<BK>': '-...-.-', '<BT>': '-...-',
+    '<CT>': '-.-.-', '<HH>': '........', '<KN>': '-.--.', '<SK>': '...-.-',
+    '<SN>': '...-.'
+};
+
+// Split CW text into transcript units: a known <XX> prosign is one unit, every
+// other character is its own.  sendCWText() and scheduleCharacterUpdates() must
+// tokenize identically or the highlight indices drift out of step.
+function cwTokenize(text) {
+    var out = [];
+    var re = /<[A-Z]{2}>/g;
+    var last = 0;
+    var m;
+    while ((m = re.exec(text)) !== null) {
+        if (!CW_MORSE[m[0]]) continue;   // unknown <XX>: falls through as plain chars
+        for (var i = last; i < m.index; i++) out.push(text[i]);
+        out.push(m[0]);
+        last = re.lastIndex;
+    }
+    for (var j = last; j < text.length; j++) out.push(text[j]);
+    return out;
+}
+
+// Rewrite <XX> prosigns into the "^XX" form the Icom keyer understands.
+function cwToRig(text) {
+    return text.replace(/<([A-Z]{2})>/g, function(whole, pair) {
+        return CW_MORSE[whole] ? '^' + pair : whole;
+    });
+}
+
 function playCWSidetone(text, startIndex) {
     // Radio sidetone mode: no local sidetone generation
     // Just schedule character status updates for the transcript display
@@ -6771,16 +7544,7 @@ function scheduleCharacterUpdates(text, startIndex) {
     // Schedule their status updates using wall-clock time so appended
     // transmissions continue seamlessly from the current progress.
 
-    var morse = {
-        'A': '.-', 'B': '-...', 'C': '-.-.', 'D': '-..', 'E': '.', 'F': '..-.',
-        'G': '--.', 'H': '....', 'I': '..', 'J': '.---', 'K': '-.-', 'L': '.-..',
-        'M': '--', 'N': '-.', 'O': '---', 'P': '.--.', 'Q': '--.-', 'R': '.-.',
-        'S': '...', 'T': '-', 'U': '..-', 'V': '...-', 'W': '.--', 'X': '-..-',
-        'Y': '-.--', 'Z': '--..', '0': '-----', '1': '.----', '2': '..---',
-        '3': '...--', '4': '....-', '5': '.....', '6': '-....', '7': '--...',
-        '8': '---..', '9': '----.', '.': '.-.-.-', ',': '--..--', '?': '..--..',
-        '/': '-..-.', '=': '-...-', '+': '.-.-.', ' ': ' '
-    };
+    var morse = CW_MORSE;
 
     var dotDuration = 1200 / cwSpeed;
     var dashDuration = dotDuration * 3;
@@ -6794,7 +7558,8 @@ function scheduleCharacterUpdates(text, startIndex) {
     var elapsed = now - cwTransmitStartTime;
 
     // Schedule updates for each character in this transmission
-    for (var i = 0; i < text.length && (startIndex + i) < cwCharacters.length; i++) {
+    var tokens = cwTokenize(text);
+    for (var i = 0; i < tokens.length && (startIndex + i) < cwCharacters.length; i++) {
         var charObj = cwCharacters[startIndex + i];
 
         (function(charObj) {
@@ -6892,7 +7657,8 @@ function updateCWTranscript() {
     for (var i = 0; i < cwCharacters.length; i++) {
         var ch = cwCharacters[i];
         var cls = 'cw-char ' + ch.status;
-        html += '<span class="' + cls + '">' + ch.char + '</span>';
+        var label = ch.char.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        html += '<span class="' + cls + '">' + label + '</span>';
     }
 
     display.innerHTML = html;
@@ -6907,16 +7673,7 @@ function sendCWText(text) {
     text = text.toUpperCase(); // Force uppercase for morse code
 
     // Calculate timing for each character
-    var morse = {
-        'A': '.-', 'B': '-...', 'C': '-.-.', 'D': '-..', 'E': '.', 'F': '..-.',
-        'G': '--.', 'H': '....', 'I': '..', 'J': '.---', 'K': '-.-', 'L': '.-..',
-        'M': '--', 'N': '-.', 'O': '---', 'P': '.--.', 'Q': '--.-', 'R': '.-.',
-        'S': '...', 'T': '-', 'U': '..-', 'V': '...-', 'W': '.--', 'X': '-..-',
-        'Y': '-.--', 'Z': '--..', '0': '-----', '1': '.----', '2': '..---',
-        '3': '...--', '4': '....-', '5': '.....', '6': '-....', '7': '--...',
-        '8': '---..', '9': '----.', '.': '.-.-.-', ',': '--..--', '?': '..--..',
-        '/': '-..-.', '=': '-...-', '+': '.-.-.', ' ': ' '
-    };
+    var morse = CW_MORSE;
 
     var dotDuration = 1200 / cwSpeed;
     var dashDuration = dotDuration * 3;
@@ -6929,8 +7686,9 @@ function sendCWText(text) {
     var startIndex = cwCharacters.length; // Track where these characters start
 
     // Add characters with timing
-    for (var i = 0; i < text.length; i++) {
-        var char = text[i];
+    var tokens = cwTokenize(text);
+    for (var i = 0; i < tokens.length; i++) {
+        var char = tokens[i];
         var pattern = morse[char];
 
         cwCharacters.push({
@@ -6960,7 +7718,7 @@ function sendCWText(text) {
         cwTransmitStartTime = Date.now();
     }
 
-    send({ cmd: 'sendCW', text: text });
+    send({ cmd: 'sendCW', text: cwToRig(text) });
     playCWSidetone(text, startIndex); // Pass the starting index
     updateCWTranscript();
 }
@@ -7399,6 +8157,41 @@ function getCurrentDigiBand() {
     }
     return (bestDist < 500000) ? best : null;
 }
+
+// Phone pane switcher for the FT8 decode area (the tab strip is hidden on
+// desktop, where both columns fit side by side).
+function digiSetPane(pane) {
+    var area = document.getElementById('digiDecodeArea');
+    if (!area) return;
+    area.dataset.pane = pane;
+    area.querySelectorAll('.digi-pane-tabs .wf-tab').forEach(function (b) {
+        b.classList.toggle('active', b.dataset.pane === pane);
+    });
+    if (pane === 'directed') {
+        var u = document.getElementById('digiDirectedUnread');
+        if (u) u.textContent = '';
+    }
+}
+// Badge the DIRECTED tab when a row lands there while another pane is up.
+(function () {
+    var panel = document.getElementById('digiDirectedPanel');
+    var area = document.getElementById('digiDecodeArea');
+    if (!panel || !area || !window.MutationObserver) return;
+    new MutationObserver(function (muts) {
+        if (area.dataset.pane === 'directed') return;
+        // Only rows addressed to us (the amber .directed ones) earn a badge;
+        // blue on-frequency traffic and our own TX rows land here too.
+        var added = 0;
+        muts.forEach(function (m) {
+            m.addedNodes.forEach(function (n) {
+                if (n.nodeType === 1 && n.classList.contains('directed')) added++;
+            });
+        });
+        if (!added) return;
+        var u = document.getElementById('digiDirectedUnread');
+        if (u) u.textContent = String((parseInt(u.textContent, 10) || 0) + added);
+    }).observe(panel, { childList: true });
+})();
 
 function toggleDigiBar() {
     digiBarVisible = !digiBarVisible;
@@ -10034,6 +10827,7 @@ console.log('=== WFWEB starting (server version available after rigInfo) ===');
 
 setMobileViewportHeight();
 buildColorTable();
+loadScopeSettings();
 initSliderTracking();
 initCWHandlers();
 initDigiHandlers();

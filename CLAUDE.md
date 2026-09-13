@@ -23,7 +23,7 @@ Both builds share the SPA frontend (see "Frontend layout — three forks" below)
 # Server build — Linux. ALWAYS use wfweb.pro, NOT wfview.pro
 qmake wfweb.pro && make -j$(nproc)
 
-# Server flags: -b (daemon), -l (logfile), -s (settings file)
+# Server flags: -b (daemon), -l (logfile), -s (settings file), -n (top-bar name tag)
 
 # Standalone build — pure browser bundle, no C++ toolchain needed
 tools/build-static.sh dist/
@@ -90,9 +90,11 @@ other.** No Direct/Server runtime gates: each `index.html` is single-purpose.
 | `resources/web-standalone/` | Static bundle (`tools/build-static.sh`) | Standalone `index.html`, `transport/serial-transport.js`, `civ/`, `wasm/` |
 | `resources/web-shared/` | Both | `index.html`-side modules and pure assets: `theme.css` (design tokens + `.wf-*` kit), `packet.js`, `transport/rig-transport.js` (base class), CW decoder JS family, `ggmorse-wasm.js`, JS8 family (`js8.mjs`, `js8-panel.mjs`, `js8-panel.css`), `models/`, `digits/`, `digits-sprite.png` |
 
-Build inputs for `ggmorse-wasm.js` (the `.cpp` source + license) live in
-`resources/ggmorse-src/`, alongside `resources/build-ggmorse-wasm.sh`. They
-aren't browser assets, so they're kept out of the SPA dirs entirely.
+Build inputs for `ggmorse-wasm.js` (the `.cpp` wrapper + license) live in
+`resources/ggmorse-src/`, alongside `resources/build-ggmorse-wasm.sh`. The
+script fetches upstream ggmorse itself at the commit pinned in `GGMORSE_COMMIT`
+(no submodule; bump the hash to update, rebuild, commit the WASM). None of
+these are browser assets, so they're kept out of the SPA dirs entirely.
 
 Build mechanics:
 - **Server**: `web.qrc` aliases keep runtime URLs at `/web/...` regardless of

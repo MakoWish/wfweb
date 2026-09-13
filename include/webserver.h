@@ -106,6 +106,9 @@ public slots:
     // Settings file used for persistent prefs written from the web layer.
     // Empty = use QSettings defaults (QCoreApplication org/app name).
     void setSettingsFile(const QString &path);
+    // --name tag: sent to the browser as rigInfo.name so the top bar and
+    // tab title show it instead of the rig model.
+    void setInstanceName(const QString &name);
     // PTT requested via rigctld (Hamlib TCP). Routed through the same
     // setPTT path the WebSocket clients use, so RADE EOO synthesis,
     // packet TX gating and ALC meter polling stay coherent.
@@ -233,6 +236,11 @@ private:
     // The rig declares the ATU command but keeps refusing its status read
     // (IC-705 with no AH-705 attached): hide the tuner until it answers.
     bool tunerRejected = false;
+
+    // Which meter the browser's second TX bar is showing. SWR and ALC are
+    // polled unconditionally, so only Comp/Vd/Id need a poll of their own —
+    // adding all three permanently would just starve the slower polls.
+    funcs txMeterFunc = funcNone;
 
     // Locally tracked active VFO/receiver. Mirrors cachingQueue::rigState.vfo
     // but is read/written entirely on webThread, so receiveCache() can route
@@ -497,6 +505,7 @@ private:
     // QSettings backing file — populated by servermain after getSettingsFilePath
     // resolves the -s flag.  Empty means "use the default (QSettings org/app)".
     QString packetSettingsFile_;
+    QString instanceName_;
     void    packetLoadSettings();
     void    packetSaveSettings();
 
@@ -592,6 +601,9 @@ private:
     void scheduleToneModeNotify();
     void addToneCaps(QJsonObject &o) const;
     void addBandCaps(QJsonObject &o) const;
+    void addTxMeterCaps(QJsonObject &o) const;
+    void addTxMeterReadings(QJsonObject &o) const;
+    void applyTxMeterPoll();
     void addToneStatus(QJsonObject &o);
     bool toneCommandsAvailable() const;
 };

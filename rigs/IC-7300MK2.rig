@@ -1,5 +1,5 @@
 [General]
-Version=2.11
+Version=2.12
 
 [Rig]
 Manufacturer=0
@@ -2505,7 +2505,7 @@ Meters\37\RigVal=120
 Meters\37\ActualVal=3
 Meters\37\RedLine=true
 Meters\38\Meter=SWR
-Meters\38\RigVal=2410
+Meters\38\RigVal=241
 Meters\38\ActualVal=6
 Meters\38\RedLine=false
 Meters\39\Meter=Voltage

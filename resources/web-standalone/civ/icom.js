@@ -561,10 +561,13 @@
         return out;
     }
 
-    // ---------- TX meters (cmd 0x15 0x11/0x12/0x13) ----------------------
+    // ---------- TX meters (cmd 0x15 0x11..0x16) --------------------------
     function cmdReadPowerMeter() { return new Uint8Array([0x15, 0x11]); }
     function cmdReadSwrMeter()   { return new Uint8Array([0x15, 0x12]); }
     function cmdReadAlcMeter()   { return new Uint8Array([0x15, 0x13]); }
+    function cmdReadCompMeter()  { return new Uint8Array([0x15, 0x14]); }
+    function cmdReadVdMeter()    { return new Uint8Array([0x15, 0x15]); }
+    function cmdReadIdMeter()    { return new Uint8Array([0x15, 0x16]); }
     function parseTxMeterReply(payload, sub) {
         if (payload.length < 4 || payload[0] !== 0x15 || payload[1] !== sub) return null;
         return decodeBcdLevel(payload[2], payload[3]);
@@ -665,6 +668,21 @@
         // [0x27, 0x15, recv, b0, b1, b2]
         if (payload.length < 6 || payload[0] !== 0x27 || payload[1] !== 0x15) return null;
         return decodeBcdLE(payload.slice(3, 6));
+    }
+
+    // ---------- Scope reference level (cmd 0x27 0x19) -------------------
+    // -20.0..+20.0 dB, given in tenths of a dB. Payload after the scope byte:
+    // BCD(10dB,1dB) BCD(0.1dB,0) sign(0=+, 1=-), e.g. +2.5 dB = 02 50 00.
+    function cmdSetScopeRef(tenths) {
+        var t = Math.max(-200, Math.min(200, Math.round(tenths)));
+        var mag = Math.abs(t);
+        return new Uint8Array([0x27, 0x19, 0x00, encodeBcd2((mag / 10) | 0), ((mag % 10) << 4) & 0xF0, t < 0 ? 0x01 : 0x00]);
+    }
+
+    // ---------- Scope sweep speed (cmd 0x27 0x1A) ------------------------
+    // 0 = FAST, 1 = MID, 2 = SLOW, after the scope byte.
+    function cmdSetScopeSpeed(speed) {
+        return new Uint8Array([0x27, 0x1A, 0x00, Math.max(0, Math.min(2, speed | 0))]);
     }
 
     // ---------- MOD INPUT — modulation source selector -----------------
@@ -1394,11 +1412,16 @@
         cmdReadPowerMeter: cmdReadPowerMeter,
         cmdReadSwrMeter: cmdReadSwrMeter,
         cmdReadAlcMeter: cmdReadAlcMeter,
+        cmdReadCompMeter: cmdReadCompMeter,
+        cmdReadVdMeter: cmdReadVdMeter,
+        cmdReadIdMeter: cmdReadIdMeter,
         cmdSendCW: cmdSendCW,
         cmdStopCW: cmdStopCW,
         cmdSetScopeSpan: cmdSetScopeSpan,
         cmdReadScopeSpan: cmdReadScopeSpan,
         parseScopeSpanReply: parseScopeSpanReply,
+        cmdSetScopeRef: cmdSetScopeRef,
+        cmdSetScopeSpeed: cmdSetScopeSpeed,
         cmdSetDataOffMod: cmdSetDataOffMod,
         cmdReadDataOffMod: cmdReadDataOffMod,
         cmdSetDataMod: cmdSetDataMod,

@@ -36,6 +36,15 @@
     // Common values: 600, 700, or 800 Hz
     const BEAT_FREQ_HZ = 600;
 
+    // Auto-tune: listen for a while, find the loudest tone in the displayed
+    // band, then move the dial so it lands on BEAT_FREQ_HZ.
+    const AUTOTUNE_WINDOW_MS = 1500;  // several elements at any sane CW speed
+    const AUTOTUNE_FRAME_MS = 50;     // spectrum snapshots inside that window
+    const AUTOTUNE_DEADBAND_HZ = 15;  // finer than the ear - don't nudge for nothing
+    const AUTOTUNE_MIN_LEVEL = 10;    // 0-255 analyser units, averaged over the window
+    const AUTOTUNE_MIN_RATIO = 1.8;   // peak must stand this far above the band average
+    const AUTOTUNE_HOLD_MS = 1600;    // how long the button shows its verdict
+
     // Audio nodes
     let analyserNode = null;
     let gainNode = null;
@@ -45,6 +54,8 @@
     let rafId = null;
     let cwWorkletLoaded = false;
     let cwUseWorklet = false;
+    let autoTuneTimer = null;
+    let autoTuneHoldTimer = null;
 
     // Audio buffer for inference - sliding window like demo
     const audioBuffer = new Float32Array(BUFFER_SAMPLES);
@@ -189,7 +200,11 @@
                 <canvas id="cwScopeCanvas"></canvas>
                 <div id="cwFilterBand"></div>
             </div>
-            <div id="cwDecoderText"><span id="cwDecoderTextInner"></span></div>
+            <div class="cw-decoder-row">
+                <div id="cwDecoderText"><span id="cwDecoderTextInner"></span></div>
+                <button id="cwAutoTune" class="wf-btn"
+                        title="Auto-tune: move the dial so the loudest CW signal sits at ${BEAT_FREQ_HZ} Hz, the centre of the decode window"></button>
+            </div>
         `;
 
         // Insert decoder section BEFORE the macro grids (transmit section)
@@ -214,23 +229,40 @@
         const style = document.createElement('style');
         style.id = 'cwDecoderStyles';
         style.textContent = `
-            #cwDecoderSection { margin: 8px 0; border-bottom: 1px solid #0a0; padding-bottom: 8px; }
+            #cwDecoderSection { margin: 6px 0; border-bottom: 1px solid #0a0; padding-bottom: 6px; }
             #cwDecoderToggle { }
             #cwDecoderToggle:hover { background: #0a0 !important; color: #000 !important; }
             #cwDecoderToggle.active { background: #0a0 !important; color: #000 !important; }
             #cwDecoderToggle.loading { background: #1a1a00 !important; border-color: #aa0 !important; color: #aa0 !important; }
             @media (orientation: portrait) and (max-width: 600px) {
-                #cwDecoderToggle { font-size: 8px !important; padding: 1px 2px !important; margin-left: 2px !important; letter-spacing: 0; }
+                #cwDecoderToggle { font-size: 10px !important; padding: 6px 5px !important; margin-left: 0 !important; min-height: 28px; letter-spacing: 0; }
+                /* The tone spectrogram is a luxury on a phone: the RF
+                   waterfall above shows the same signal, and the whole bar
+                   must fit under 65% of the scope area. Keep the text line. */
+                .cw-scope-container { display: none; }
             }
-            .cw-scope-container { position: relative; width: 100%; height: 100px; }
-            #cwScopeCanvas { display: block; background: #000; width: 100%; height: 100px; border-radius: 4px; border: 1px solid #0a0; }
+            .cw-scope-container { position: relative; width: 100%; height: 48px; }
+            #cwScopeCanvas { display: block; background: #000; width: 100%; height: 48px; border-radius: 4px; border: 1px solid #0a0; }
             #cwFilterBand { position: absolute; left: 0; right: 0; pointer-events: none; border-top: 1px solid #f00; border-bottom: 1px solid #f00; display: none; }
             #cwFilterBand.active { display: block; }
-            #cwDecoderText { width: 100%; font-size: 20px; background: #000; border-radius: 4px; border: 1px solid #0a0; height: 32px; margin-top: 8px; color: #0f0; overflow-x: scroll; overflow-y: hidden; scrollbar-width: none; -ms-overflow-style: none; box-sizing: border-box; font-family: 'Courier New', monospace; line-height: 32px; padding: 0 8px; }
+            .cw-decoder-row { display: flex; align-items: stretch; gap: 6px; margin-top: 6px; }
+            #cwAutoTune { flex: 0 0 auto; height: 32px; min-width: 84px; font-size: 11px; letter-spacing: 1px; }
+            #cwAutoTune.busy { opacity: 0.6; cursor: progress; }
+            #cwAutoTune.ok { background: var(--mode-accent-dim); color: var(--on-accent); border-color: var(--mode-accent); }
+            #cwAutoTune.warn { background: #1a1a00; border-color: #aa0; color: #aa0; }
+            #cwDecoderText { flex: 1 1 auto; min-width: 0; font-size: 20px; background: #000; border-radius: 4px; border: 1px solid #0a0; height: 32px; color: #0f0; overflow-x: scroll; overflow-y: hidden; scrollbar-width: none; -ms-overflow-style: none; box-sizing: border-box; font-family: 'Courier New', monospace; line-height: 32px; padding: 0 8px; }
             #cwDecoderText::-webkit-scrollbar { display: none; }
             #cwDecoderTextInner { white-space: pre; display: inline; }
             .cw-decoded-call { color: #ff0; cursor: pointer; text-decoration: underline; }
             .cw-decoded-call:hover { color: #000; background: #ff0; }
+            /* Phone portrait: with the spectrogram hidden, auto-tune is the
+               only way left to centre a signal, so keep the button - just
+               narrow enough to leave the decoded text room to read. */
+            @media (orientation: portrait) and (max-width: 600px) {
+                #cwAutoTune { min-width: 0; height: 28px; padding: 0 8px; font-size: 10px; }
+                #cwAutoTune .cw-wide { display: none; }   /* "AUTOTUNE" reads "AUTO" */
+                #cwDecoderText { height: 28px; line-height: 28px; font-size: 16px; }
+            }
         `;
         document.head.appendChild(style);
     }
@@ -246,6 +278,8 @@
 
     function setupEventListeners() {
         document.getElementById('cwDecoderToggle')?.addEventListener('click', toggleDecoder);
+        document.getElementById('cwAutoTune')?.addEventListener('click', autoTune);
+        setAutoTuneState('idle');
 
         if (canvas) {
             canvas.addEventListener('click', handleCanvasClick);
@@ -468,6 +502,8 @@
             decoderWorker = null;
         }
 
+        cancelAutoTune();
+
         decoderState.enabled = false;
         decoderState.loaded = false;
         decoderState.loading = false;
@@ -680,52 +716,164 @@
         band.classList.add('active');
     }
 
+    // ------------------------------------------------------------------
+    // Tuning
+    // ------------------------------------------------------------------
+
+    // Read a value the host page owns (currentFreq, currentMode, send, ...).
+    // The decoder also runs framed, so fall back to the parent document.
+    function host(prop) {
+        if (window[prop] !== undefined) return window[prop];
+        try {
+            if (window.parent && window.parent !== window && window.parent[prop] !== undefined) {
+                return window.parent[prop];
+            }
+        } catch (e) { /* cross-origin parent */ }
+        return undefined;
+    }
+
+    function hostSend(msg) {
+        const send = host('send');
+        if (typeof send === 'function') send(msg);
+    }
+
+    // How far to move the dial to drop an audio tone onto the sidetone pitch.
+    // Icom receives normal CW on the LSB side and CW-R on the USB side
+    // (IC-7600 manual, "About CW reverse mode"), so the dial moves the
+    // opposite way in reverse: a tone above the pitch means the signal sits
+    // below the dial in CW, above it in CW-R.
+    function dialDeltaForTone(toneHz) {
+        const reverse = String(host('currentMode') || '').toUpperCase() === 'CW-R';
+        return reverse ? (toneHz - BEAT_FREQ_HZ) : (BEAT_FREQ_HZ - toneHz);
+    }
+
+    // Returns the dial move actually sent, or null if the host has no VFO yet.
+    function tuneToTone(toneHz) {
+        const dial = host('currentFreq') || 0;
+        if (dial <= 0) return null;
+
+        const delta = dialDeltaForTone(toneHz);
+        hostSend({ cmd: 'setFrequency', value: Math.round(dial + delta) });
+        return delta;
+    }
+
+    // Auto-tune: average the spectrum over a short window, take the loudest
+    // tone in the displayed band and pull it to the centre of the decode
+    // window. CW is on/off keyed, so averaging weights the tone by its duty
+    // cycle while noise averages flat - a single burst can't win the peak.
+    // Searching only MIN_FREQ_HZ..MAX_FREQ_HZ also caps the pull at +/-400 Hz,
+    // near the +/-500 Hz capture range of Icom's own AUTO TUNE.
+    function autoTune() {
+        if (autoTuneTimer) return;                       // already listening
+        if (!decoderState.enabled || !analyserNode || !audioContext) return;
+
+        const freqBins = analyserNode.frequencyBinCount;
+        const binHz = (audioContext.sampleRate / 2) / freqBins;
+        const minBin = Math.max(1, Math.round(MIN_FREQ_HZ / binHz));
+        const maxBin = Math.min(freqBins - 2, Math.round(MAX_FREQ_HZ / binHz));
+        if (maxBin - minBin < 4) return;
+
+        const spectrum = new Uint8Array(freqBins);
+        const sums = new Float64Array(maxBin - minBin + 1);
+        let frames = 0;
+
+        setAutoTuneState('busy');
+
+        autoTuneTimer = setInterval(() => {
+            if (!decoderState.enabled || !analyserNode) { cancelAutoTune(); return; }
+
+            analyserNode.getByteFrequencyData(spectrum);
+            for (let b = minBin; b <= maxBin; b++) sums[b - minBin] += spectrum[b];
+            frames++;
+
+            if (frames * AUTOTUNE_FRAME_MS < AUTOTUNE_WINDOW_MS) return;
+
+            clearInterval(autoTuneTimer);
+            autoTuneTimer = null;
+            finishAutoTune(sums, minBin, binHz, frames);
+        }, AUTOTUNE_FRAME_MS);
+    }
+
+    function cancelAutoTune() {
+        if (autoTuneTimer) { clearInterval(autoTuneTimer); autoTuneTimer = null; }
+        if (autoTuneHoldTimer) { clearTimeout(autoTuneHoldTimer); autoTuneHoldTimer = null; }
+        setAutoTuneState('idle');
+    }
+
+    function finishAutoTune(sums, minBin, binHz, frames) {
+        let peak = 1;
+        let total = 0;
+        for (let i = 0; i < sums.length; i++) {
+            total += sums[i];
+            if (i > 0 && i < sums.length - 1 && sums[i] > sums[peak]) peak = i;
+        }
+
+        const level = sums[peak] / frames;               // 0-255, as the analyser scales it
+        const average = total / sums.length / frames;
+        if (level < AUTOTUNE_MIN_LEVEL || level < average * AUTOTUNE_MIN_RATIO) {
+            console.log('[CW Decoder] Auto-tune: no signal (peak ' + level.toFixed(0) +
+                        ', band average ' + average.toFixed(0) + ')');
+            setAutoTuneState('warn', 'NO SIG');
+            return;
+        }
+
+        // Parabolic interpolation across the peak and its neighbours: one FFT
+        // bin is ~12 Hz wide, coarser than the deadband we want to hold.
+        const a = sums[peak - 1], b = sums[peak], c = sums[peak + 1];
+        const denom = a - 2 * b + c;
+        const frac = denom !== 0 ? Math.max(-0.5, Math.min(0.5, 0.5 * (a - c) / denom)) : 0;
+        const toneHz = (minBin + peak + frac) * binHz;
+
+        if (Math.abs(dialDeltaForTone(toneHz)) < AUTOTUNE_DEADBAND_HZ) {
+            console.log('[CW Decoder] Auto-tune: already centred (' + toneHz.toFixed(0) + ' Hz)');
+            setAutoTuneState('ok', '\u2713 ' + Math.round(toneHz) + ' Hz');
+            return;
+        }
+
+        const delta = tuneToTone(toneHz);
+        if (delta === null) {
+            setAutoTuneState('warn', 'NO VFO');
+            return;
+        }
+        console.log('[CW Decoder] Auto-tune: ' + toneHz.toFixed(0) + ' Hz tone, dial ' +
+                    (delta > 0 ? '+' : '') + Math.round(delta) + ' Hz');
+        setAutoTuneState('ok', (delta > 0 ? '+' : '\u2212') + Math.abs(Math.round(delta)) + ' Hz');
+    }
+
+    // Button label doubles as the auto-tune readout: what it heard, or why not.
+    function setAutoTuneState(state, label) {
+        const btn = document.getElementById('cwAutoTune');
+        if (!btn) return;
+
+        if (autoTuneHoldTimer) { clearTimeout(autoTuneHoldTimer); autoTuneHoldTimer = null; }
+        btn.className = 'wf-btn' + (state === 'idle' ? '' : ' ' + state);
+
+        if (state === 'idle') {
+            btn.innerHTML = '\u2316 AUTO<span class="cw-wide">TUNE</span>';
+        } else if (state === 'busy') {
+            btn.textContent = 'LISTENING';
+        } else {
+            btn.textContent = label;
+            autoTuneHoldTimer = setTimeout(() => {
+                autoTuneHoldTimer = null;
+                setAutoTuneState('idle');
+            }, AUTOTUNE_HOLD_MS);
+        }
+    }
+
     // Canvas interactions
     function handleCanvasClick(event) {
-        // Click to tune radio - filter band stays centered
+        // Click a tone to tune it to the centre of the decode window.
         const rect = canvas.getBoundingClientRect();
-        const y = event.clientY - rect.top;
-        const invY = rect.height - y;
-        const freqRange = MAX_FREQ_HZ - MIN_FREQ_HZ;
-
-        // Calculate which audio frequency was clicked
-        const clickedAudioFreq = MIN_FREQ_HZ + (invY / rect.height) * freqRange;
-
-        // Calculate offset from beat frequency to tune the radio
-        // The radio's CW mode shifts signals to BEAT_FREQ_HZ (sidetone)
-        // We want the clicked signal to end up at BEAT_FREQ_HZ in the audio
-        const offsetFromCenter = BEAT_FREQ_HZ - clickedAudioFreq;
-
-        // Get current radio frequency from parent window
-        let currentFreq = 0;
-        if (window.currentFreq) {
-            currentFreq = window.currentFreq;
-        } else if (window.parent && window.parent.currentFreq) {
-            currentFreq = window.parent.currentFreq;
-        }
-
-        if (currentFreq > 0) {
-            const newFreq = currentFreq + offsetFromCenter;
-            // Send frequency change command
-            if (window.send) {
-                window.send({ cmd: 'setFrequency', value: Math.round(newFreq) });
-            } else if (window.parent && window.parent.send) {
-                window.parent.send({ cmd: 'setFrequency', value: Math.round(newFreq) });
-            }
-        }
+        const invY = rect.height - (event.clientY - rect.top);
+        const clickedAudioFreq = MIN_FREQ_HZ + (invY / rect.height) * (MAX_FREQ_HZ - MIN_FREQ_HZ);
+        tuneToTone(clickedAudioFreq);
     }
 
     function handleWheel(e) {
         e.preventDefault();
 
-        // Get current radio frequency
-        let currentFreq = 0;
-        if (window.currentFreq) {
-            currentFreq = window.currentFreq;
-        } else if (window.parent && window.parent.currentFreq) {
-            currentFreq = window.parent.currentFreq;
-        }
-
+        const currentFreq = host('currentFreq') || 0;
         if (currentFreq <= 0) return;
 
         // Tune radio up/down by 50 Hz
@@ -738,11 +886,7 @@
             newFreq -= step;
         }
 
-        if (window.send) {
-            window.send({ cmd: 'setFrequency', value: Math.round(newFreq) });
-        } else if (window.parent && window.parent.send) {
-            window.parent.send({ cmd: 'setFrequency', value: Math.round(newFreq) });
-        }
+        hostSend({ cmd: 'setFrequency', value: Math.round(newFreq) });
     }
 
     // Expose API

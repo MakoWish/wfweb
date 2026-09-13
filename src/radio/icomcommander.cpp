@@ -3171,7 +3171,11 @@ void icomCommander::receiveCommand(funcs func, QVariant value, uchar receiver)
                             (p==0x2D) || (p==0x2C) || (p==0x3A) ||
                             (p==0x27) || (p==0x28) || (p==0x29) ||
                             (p==0x3D) || (p==0x2B) || (p==0x22) ||
-                            (p==0x40) || (p==0x20))
+                            (p==0x40) || (p==0x20) ||
+                            // "^" prefixes a pair of letters the keyer sends
+                            // with no inter-character space, i.e. a prosign
+                            // (^AR, ^SK, ^BK).  "*" inserts the contest serial.
+                            (p==0x5E) || (p==0x2A))
                         {
                             // Allowed character, continue
                         } else {
