@@ -6,6 +6,88 @@ a built-in web interface. See https://gitlab.com/eliggett/wfview for the
 upstream wfview history.
 
 
+v0.9.0 (2026-09-13)
+--------------------
+
+Scope / waterfall:
+- The spectrum is drawn as one solid bar per bin on the rig's fixed
+  count scale, with the tracked noise floor seated at the axis so only
+  the noise peaks show as grass, a grey 4.5 s per-bin peak-hold ghost
+  behind the live sweep, and the trace easing toward each new sweep so
+  the IC-7300's ~4 sweeps/s over USB no longer looks like a slideshow.
+- The waterfall gets a navy -> blue -> cyan -> white palette anchored to
+  the noise floor with a steep 15 dB window, and slides continuously
+  between sweeps instead of stepping whole rows.
+- A scope sheet opens from the span indicator as a bottom strip, so the
+  scope stays visible while adjusting: SPAN, MODE, REF and SPEED, one
+  setting per line. MODE FIXED leaves the waterfall history where it was
+  painted and never pans on a drag (the rig's own behaviour, now the
+  default); TRACK is the previous panning behaviour. REF (AUTO / -2.5 /
+  +2.5 dB) and SPEED (SLOW / MID / FAST) are applied in the browser and
+  mirrored to the rig.
+
+CW:
+- Prosigns send and decode. Type <AR> / <SK> / <BK> and the like in the
+  keyer box; the transcript tracks a prosign as one unit so character
+  highlighting stays in step with what the rig is keying. On receive,
+  the nine run-together patterns that used to land on punctuation or '?'
+  now expand back to their <..> form.
+- A new AUTOTUNE button moves the dial so the loudest tone in the
+  200-1000 Hz band lands on the decode centre. It averages over 1.5 s,
+  so a single burst can't win the peak, and pulls at most +/-400 Hz.
+  Previously the only way to centre a signal was to click the right row
+  of the spectrogram, which phones don't even draw.
+
+Web UI:
+- Tapping the meter cycles its lower row through SWR, ALC, COMP, Vd and
+  Id, the same set the radio's own multi-function meter offers. Only
+  readings the connected radio can produce are offered, and the faces
+  are built from each .rig file's calibration table rather than
+  hardcoded numbers, which keeps Id honest across models (25 A on an
+  IC-7300, 4 A on an IC-905).
+- The top bar carries a tag with the rig model, and the same label goes
+  into the browser tab title, so several wfweb instances side by side
+  can be told apart. The server build's new -n/--name <tag> flag
+  replaces the model with a name of your choosing.
+- Gain meter polish: RX/TX section headers, tick marks visible above an
+  empty bar, gradient fill with a leading-edge needle.
+- Powering off a rig that cannot be woken again over the same cable now
+  warns first. The IC-7600 accepts power-on only from its [REMOTE] jack,
+  and leaves its USB interface unpowered in standby, so a USB session
+  can switch it off and never switch it back on.
+
+Rigs:
+- IC-7300 and IC-7300MK2 SWR calibration: the table's top point was
+  2410 instead of 241, so every reading above the red line came back far
+  too low - a real SWR near 4.5 decoded as about 3.1.
+
+Fixes:
+- Every panel is usable on a phone in portrait. Swept both forks at
+  390x844, 375x667 and 360x740: the packet header wraps so its controls
+  stay on screen, the heard-stations table scrolls sideways, the FreeDV
+  readout stays clear of the right edge, and the smallest buttons grew
+  to a tappable size.
+- The CW bar no longer buries the waterfall. The scope lays itself out
+  in the strip above the bar at every viewport, the bar is capped at 65%
+  of the scope area, and the scope stays tappable while decoding.
+- Opening or closing the CW bar - or any window resize - no longer wipes
+  the waterfall history.
+- The CW decoder starts when the page opens straight into CW (rig
+  already in CW at page load, or ?m=CW), not only when CW is entered
+  from another mode.
+- FT8 on a phone: the status bar and action row fit within 360px, and
+  the DIRECTED tab badge counts only messages addressed to your call
+  rather than all on-frequency traffic.
+- The power button is really gated on rig capability now. Rigs whose
+  .rig file declares no Power Control command (IC-718, IC-706 and
+  IC-746/756 families, IC-9100, IC-R7100) showed a button that dropped
+  the command but still raised the "Radio is powered off" screen.
+
+Build:
+- resources/build-ggmorse-wasm.sh fetches upstream ggmorse itself at the
+  commit pinned in GGMORSE_COMMIT, so the CW decoder WASM can be rebuilt
+  without an ad-hoc clone at an unrecorded revision.
+
 v0.8.6 (2026-09-06)
 --------------------
 
