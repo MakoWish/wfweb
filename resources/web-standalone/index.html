@@ -7202,11 +7202,20 @@ function resizeCanvases() {
 function initWaterfallBuffer(dataLen) {
     var wfCanvas = document.getElementById('waterfallCanvas');
     var h = wfCanvas.height || 200;
+    var prevImage = wfImageData;
     wfOffCanvas = document.createElement('canvas');
     wfOffCanvas.width = dataLen; wfOffCanvas.height = h;
     wfOffCtx = wfOffCanvas.getContext('2d');
     wfImageData = wfOffCtx.createImageData(dataLen, h);
     wfFillBlank(wfImageData.data, 0, wfImageData.data.length);
+    // Carry the history over when only the strip's height changed (opening
+    // or closing the CW bar resizes the scope area, and so does any window
+    // resize) — new sweeps land at row 0, so a top-aligned copy keeps the
+    // waterfall continuous instead of blanking it on every panel toggle.
+    if (prevImage && prevImage.width === dataLen) {
+        var rows = Math.min(prevImage.height, h);
+        wfImageData.data.set(prevImage.data.subarray(0, rows * dataLen * 4), 0);
+    }
     wfBufDirty = true;
 }
 
