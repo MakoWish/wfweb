@@ -152,7 +152,7 @@
         setToneMode: true, setToneFreq: true, setTsqlFreq: true,
         setDtcsCode: true,
         // Misc
-        setTuner: true, setPower: true, setSpan: true,
+        setTuner: true, setPower: true, setSpan: true, setScopeRef: true, setScopeSpeed: true,
         // CW
         sendCW: true, stopCW: true,
         // Filter width / shape
@@ -686,6 +686,16 @@
                         this._enqueue('setSpan', civ.cmdSetScopeSpan(spHz));
                         this._emit('update', { spanIndex: spIdx });
                     }
+                    return;
+                case 'setScopeRef':
+                    // Tenths of a dB; the SPA renders the shift itself, the
+                    // rig just gets the same value so its screen matches.
+                    if (typeof obj.value === 'number' && this._hasSpectrum)
+                        this._enqueue('setScopeRef', civ.cmdSetScopeRef(obj.value));
+                    return;
+                case 'setScopeSpeed':
+                    if (typeof obj.value === 'number' && this._hasSpectrum)
+                        this._enqueue('setScopeSpeed', civ.cmdSetScopeSpeed(obj.value));
                     return;
                 case 'sendCW':
                     if (!this._rigCanTransmit()) return;

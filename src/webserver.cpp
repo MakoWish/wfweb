@@ -2067,6 +2067,22 @@ void webServer::handleCommand(QWebSocket *client, const QJsonObject &cmd)
             queue->addUnique(priorityImmediate, queueItem(funcScopeSpan, QVariant::fromValue<centerSpanData>(span), false, 0));
         }
     }
+    else if (type == "setScopeRef") {
+        // Scope reference level in tenths of a dB (-200..+200). The browser
+        // renders the REF shift itself (the streamed wave data doesn't move
+        // with it); this mirrors the value to the rig so its screen matches.
+        // The Icom encoder takes an int in tenths: 25 -> BCD 02 50 -> +2.5 dB.
+        int tenths = qBound(-200, cmd["value"].toInt(), 200);
+        if (rigCaps && rigCaps->commands.contains(funcScopeRef))
+            queue->addUnique(priorityImmediate, queueItem(funcScopeRef, QVariant::fromValue<int>(tenths), false, 0));
+    }
+    else if (type == "setScopeSpeed") {
+        // Scope sweep speed (0x27 0x1A): 0 = FAST, 1 = MID, 2 = SLOW. The
+        // browser scrolls its own waterfall at the matching rows-per-sweep.
+        uchar speed = static_cast<uchar>(qBound(0, cmd["value"].toInt(), 2));
+        if (rigCaps && rigCaps->commands.contains(funcScopeSpeed))
+            queue->addUnique(priorityImmediate, queueItem(funcScopeSpeed, QVariant::fromValue<uchar>(speed), false, 0));
+    }
     else if (type == "enableAudio") {
         bool enable = cmd["value"].toBool();
         if (enable) {

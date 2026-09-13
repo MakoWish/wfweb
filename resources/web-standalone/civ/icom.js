@@ -667,6 +667,21 @@
         return decodeBcdLE(payload.slice(3, 6));
     }
 
+    // ---------- Scope reference level (cmd 0x27 0x19) -------------------
+    // -20.0..+20.0 dB, given in tenths of a dB. Payload after the scope byte:
+    // BCD(10dB,1dB) BCD(0.1dB,0) sign(0=+, 1=-), e.g. +2.5 dB = 02 50 00.
+    function cmdSetScopeRef(tenths) {
+        var t = Math.max(-200, Math.min(200, Math.round(tenths)));
+        var mag = Math.abs(t);
+        return new Uint8Array([0x27, 0x19, 0x00, encodeBcd2((mag / 10) | 0), ((mag % 10) << 4) & 0xF0, t < 0 ? 0x01 : 0x00]);
+    }
+
+    // ---------- Scope sweep speed (cmd 0x27 0x1A) ------------------------
+    // 0 = FAST, 1 = MID, 2 = SLOW, after the scope byte.
+    function cmdSetScopeSpeed(speed) {
+        return new Uint8Array([0x27, 0x1A, 0x00, Math.max(0, Math.min(2, speed | 0))]);
+    }
+
     // ---------- MOD INPUT — modulation source selector -----------------
     // Two registers: "Data OFF Mod Input" (used in voice modes) and
     // "DATA1 Mod Input" (used in DATA-on modes — USB-D, LSB-D, …). The
@@ -1399,6 +1414,8 @@
         cmdSetScopeSpan: cmdSetScopeSpan,
         cmdReadScopeSpan: cmdReadScopeSpan,
         parseScopeSpanReply: parseScopeSpanReply,
+        cmdSetScopeRef: cmdSetScopeRef,
+        cmdSetScopeSpeed: cmdSetScopeSpeed,
         cmdSetDataOffMod: cmdSetDataOffMod,
         cmdReadDataOffMod: cmdReadDataOffMod,
         cmdSetDataMod: cmdSetDataMod,

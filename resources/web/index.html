@@ -385,7 +385,7 @@ html, body {
 }
 #spectrumCanvas {
     top: 0; height: 35%;
-    background: #050510;
+    background: #05070c;
 }
 #waterfallCanvas {
     top: 35%; height: 65%;
@@ -572,15 +572,43 @@ html, body {
 }
 
 /* SPAN overlay */
+/* SPAN / REF is a bottom sheet, not a full cover: both settings change what
+   the scope shows, so the spectrum and the newest waterfall rows stay in
+   view above it while you pick. */
 #spanOverlay.visible {
     flex-direction: column;
-    padding: 4px 12px;
+    top: auto; bottom: 0;
+    padding: 5px 8px 6px;
+    gap: 4px;
+    background: rgba(8,8,8,0.92);
+    border-top: 1px solid #2a2a2a;
 }
-#spanOverlay .overlay-grid {
+/* One setting per line: a narrow label column, then that line's keys
+   stretched across the full width (auto-fit: two keys take half each,
+   eight take an eighth; on a phone the span keys wrap to two lines). */
+.scope-row {
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 6px; padding: 4px 0;
-    flex: 1; align-content: center;
+    grid-template-columns: 50px 1fr;
+    align-items: center;
+    gap: 6px;
+}
+.scope-row-label {
+    font-size: 10px; letter-spacing: 1.5px; color: #888;
+    text-transform: uppercase;
+}
+.scope-row .overlay-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(64px, 1fr));
+    gap: 4px; padding: 0;
+    flex: 0 0 auto;
+}
+.scope-row-value {
+    font-size: 11px; color: #0cc; font-family: var(--font-mono);
+    text-align: center; white-space: nowrap;
+}
+#spanOverlay .ov-btn { min-height: 30px; font-size: 12px; }
+@media (max-width: 600px) {
+    #spanOverlay .ov-btn { min-height: 28px; font-size: 11px; }
 }
 
 /* Overlay button */
@@ -2127,8 +2155,27 @@ body.digi-open #bottomBar { grid-row: 5; }
 
         <!-- Span overlay -->
         <div id="spanOverlay" class="overlay">
-            <div class="overlay-title">SPAN</div>
-            <div class="overlay-grid" id="spanGrid"></div>
+            <div class="scope-row"><span class="scope-row-label">Span</span>
+                <div class="overlay-grid" id="spanGrid"></div></div>
+            <div class="scope-row"><span class="scope-row-label">Mode</span>
+                <div class="overlay-grid">
+                    <button class="ov-btn active" id="wfTrackFixedBtn" onclick="setWfTracking('fixed')" title="Waterfall stays put on tune, like the rig's screen">FIXED</button>
+                    <button class="ov-btn" id="wfTrackTrackBtn" onclick="setWfTracking('track')" title="Waterfall history pans on tune so frequencies stay aligned">TRACK</button>
+                </div></div>
+            <div class="scope-row"><span class="scope-row-label">Ref</span>
+                <div class="overlay-grid">
+                    <button class="ov-btn active" id="scopeRefAutoBtn" onclick="setScopeRef(null)">AUTO</button>
+                    <button class="ov-btn" onclick="stepScopeRef(-1)">REF &minus;</button>
+                    <button class="ov-btn" onclick="stepScopeRef(1)">REF +</button>
+                    <span class="scope-row-value" id="scopeRefValue">AUTO</span>
+                </div></div>
+            <div class="scope-row"><span class="scope-row-label">Speed</span>
+                <div class="overlay-grid">
+                    <button class="ov-btn" id="wfSpeedSlowBtn" onclick="setWfSpeed('slow')">SLOW</button>
+                    <button class="ov-btn active" id="wfSpeedMidBtn" onclick="setWfSpeed('mid')">MID</button>
+                    <button class="ov-btn" id="wfSpeedFastBtn" onclick="setWfSpeed('fast')">FAST</button>
+                    <button class="ov-btn back-btn" onclick="setPanel('default')">&#x21A9;</button>
+                </div></div>
         </div>
 
         <!-- DUP window (styled like the memory browser). Opened from the DUP
@@ -2773,6 +2820,35 @@ var wfOffCanvas = null;
 var wfOffCtx = null;
 var spectRenderPending = false;
 var colorTable = null;
+// Browser-side scope settings (persisted in localStorage).
+var wfTracking = 'fixed';        // 'fixed' | 'track' — waterfall scrolling on tune, see setWfTracking()
+var wfSpeed = 'mid';             // 'slow' | 'mid' | 'fast' — waterfall rows per sweep, mirrored to the rig's scope speed
+var WF_SPEED_ROWS = { slow: 1, mid: 2, fast: 4 };
+var WF_SPEED_CIV = { fast: 0, mid: 1, slow: 2 };   // CI-V 27 1A values
+var wfPrevSweep = null;          // previous sweep, blended into the in-between rows at MID / FAST
+var scopeRefDb = null;           // null = AUTO, else -20..+20 dB in 2.5 dB steps (mirrored to the rig)
+var wfAutoRefDb = 0;             // AUTO's pick: the REF that seats the noise floor on the palette floor
+var wfAutoRefCalibrated = false;
+var wfEmaFloor = 0;              // tracked noise floor, in wave-data counts
+var wfFloorCalibrated = false;
+var spectHold = [];              // recent sweeps {t, data} behind the grey peak-hold afterglow
+var spectHoldStart = 0, spectHoldEnd = 0;
+// The trace as drawn eases toward each new sweep instead of jumping: the
+// IC-7300 only delivers ~4 sweeps/s over USB, so a hard cut every 240 ms
+// looks like a slideshow. Cosmetic only — the hold ghost and the waterfall
+// use the raw sweeps.
+var spectShown = null;           // Float32Array: the eased trace being drawn
+var spectFrom = null;            // Float32Array: where the current ease started
+var spectTweenStart = 0;         // 0 = no ease in progress (draw the sweep as is)
+var spectTweenMs = 200;          // ease duration, follows the measured inter-sweep gap
+var spectLastSweepAt = 0;
+var spectTweenPending = false;
+var scopeSweepGapMs = 250;       // smoothed inter-sweep gap: the rig's own cadence
+// The waterfall slides continuously between sweeps instead of stepping n
+// rows when one lands: the picture drifts down by the rows the next sweep
+// will add, timed to the cadence, so the new rows arrive where the slide is.
+var wfBufDirty = true;           // offscreen buffer changed since the last putImageData
+var wfScrollRows = 0;            // rows the buffer scrolled at the last sweep
 var scopeFreezeDuringDrag = false;
 var scopeDragActive = false;
 var scopeDragMoved = false;
@@ -2982,7 +3058,7 @@ function handleMessage(msg) {
             }
             if (msg.connected) {
                 if (msg.modes) populateModes(msg.modes);
-                if (msg.hasSpectrum) { hasSpectrum = true; spectAmpMax = msg.spectAmpMax || 160; }
+                if (msg.hasSpectrum) { hasSpectrum = true; spectAmpMax = msg.spectAmpMax || 160; scopeRigAssert(); }
                 if (msg.audioAvailable) { audioAvailable = true; audioSampleRate = msg.audioSampleRate || 48000; }
                 if (msg.audioError) showAudioError(msg.audioError);
                 updateTxAudioAvailable(msg.txAudioAvailable || false);
@@ -3014,7 +3090,7 @@ function handleMessage(msg) {
             if (msg.model) rigModelName = msg.model;
             updateRigTag();
             if (msg.modes) populateModes(msg.modes);
-            if (msg.hasSpectrum) { hasSpectrum = true; spectAmpMax = msg.spectAmpMax || 160; }
+            if (msg.hasSpectrum) { hasSpectrum = true; spectAmpMax = msg.spectAmpMax || 160; scopeRigAssert(); }
             if (msg.audioAvailable) { audioAvailable = true; audioSampleRate = msg.audioSampleRate || 48000; }
             if (msg.audioError) showAudioError(msg.audioError);
             updateTxAudioAvailable(msg.txAudioAvailable || false);
@@ -4342,7 +4418,7 @@ function getBottomButtons() {
         case 'mode':
         case 'band':
         case 'func':
-
+        case 'span':
         case 'gain':
             return [
                 { label: 'MODE', active: currentPanel === 'mode', action: function() { setPanel('mode'); } },
@@ -4353,7 +4429,6 @@ function getBottomButtons() {
                 { label: isCW ? 'KEY' : 'PTT', txActive: isTransmitting, cls: isCW ? 'key-btn' : 'ptt-btn', disabled: currentPanel !== 'default', action: currentPanel !== 'default' ? null : (isCW ? toggleCWBar : function() { handlePTTPress(); }) }
             ];
         case 'audiomiс':
-        case 'span':
         case 'freqinp':
         case 'memory':
             return [
@@ -5256,14 +5331,9 @@ function renderSpanOverlay() {
         var btn = document.createElement('button');
         btn.className = 'ov-btn' + (i === currentSpanIndex ? ' active' : '');
         btn.textContent = availableSpans[i].name;
-        btn.onclick = (function(idx) { return function() { setSpan(idx); setPanel('default'); }; })(i);
+        btn.onclick = (function(idx) { return function() { setSpan(idx); }; })(i);
         grid.appendChild(btn);
     }
-    var back = document.createElement('button');
-    back.className = 'ov-btn back-btn';
-    back.innerHTML = '&#x21A9;';
-    back.onclick = function() { setPanel('scope'); };
-    grid.appendChild(back);
     document.getElementById('spanOverlay').classList.add('visible');
 }
 
@@ -6266,16 +6336,144 @@ function flushAudio() {
 // ============================================================
 // SPECTRUM / WATERFALL
 // ============================================================
+// The rig's wave data is on a fixed log scale: 0..spectAmpMax counts cover
+// about 45 dB (IC-7300, measured: the 20 dB attenuator moves every count by
+// ~72), and the reference level does NOT move the streamed counts. So the
+// browser applies the REF shift itself and the picture matches the rig's
+// screen: the REF-shifted floor is the trace baseline and the palette floor.
+var SPECT_DB_SPAN = 45;
+var WF_FLOOR_T = 0.10;           // where the noise floor sits on the LUT ramp (near-black navy)
+var WF_WINDOW_DB = 15;           // dB from the floor to white — the rig's waterfall ramp is this steep
+var SPECT_HOLD_MS = 4500;        // how long a peak stays in the grey hold ghost
+var WF_LUT_MAX = 160;
+
+function spectCountsPerDb() { return spectAmpMax / SPECT_DB_SPAN; }
+
+// Waterfall palette: the floor is a deep navy (only below-floor dips darken
+// further), signals climb through blue and cyan into near-white peaks.
 function buildColorTable() {
-    colorTable = new Array(256);
-    for (var i = 0; i < 256; i++) {
-        var v = i / 255; var r, g, b;
-        if (v < 0.25) { r = 0; g = Math.round(255 * (v / 0.25)); b = 255; }
-        else if (v < 0.5) { r = 0; g = 255; b = Math.round(255 * (1 - (v - 0.25) / 0.25)); }
-        else if (v < 0.75) { r = Math.round(255 * ((v - 0.5) / 0.25)); g = 255; b = 0; }
-        else { r = 255; g = Math.round(255 * (1 - (v - 0.75) / 0.25)); b = 0; }
-        colorTable[i] = [r, g, b];
+    var stops = [
+        [0.00, [1, 3, 18]],
+        [0.20, [8, 18, 76]],
+        [0.50, [28, 84, 216]],
+        [0.72, [63, 184, 232]],
+        [0.88, [150, 214, 240]],
+        [1.00, [242, 250, 255]]
+    ];
+    colorTable = new Array(WF_LUT_MAX + 1);
+    for (var i = 0; i <= WF_LUT_MAX; i++) {
+        var t = i / WF_LUT_MAX, upper = stops.length - 1;
+        for (var k = 0; k < stops.length; k++) { if (stops[k][0] >= t) { upper = k; break; } }
+        if (upper === 0) { colorTable[i] = stops[0][1].slice(); continue; }
+        var t0 = stops[upper - 1][0], c0 = stops[upper - 1][1];
+        var t1 = stops[upper][0], c1 = stops[upper][1];
+        var f = (t - t0) / (t1 - t0);
+        colorTable[i] = [
+            (c0[0] + (c1[0] - c0[0]) * f) | 0,
+            (c0[1] + (c1[1] - c0[1]) * f) | 0,
+            (c0[2] + (c1[2] - c0[2]) * f) | 0
+        ];
     }
+}
+
+// The REF shift the waterfall palette applies. On rigs whose stream already
+// carries the reference level (the IC-705's LAN stream) a manual REF renders
+// unshifted: the rig moved the counts, shifting again doubles the effect.
+function scopeDisplayRefDb() {
+    if (scopeRefDb === null) return wfAutoRefDb;
+    return /705/.test(rigModelName) ? 0 : scopeRefDb;
+}
+
+// The spectrum trace follows a manual REF only faintly: on the rig the
+// waterfall brightness takes the full shift while the trace barely moves.
+// AUTO commands 0 dB to the rig, so the trace is the rig's own picture.
+var SPECT_REF_GAIN = 0.25;
+function spectRefShiftDb() {
+    if (scopeRefDb === null) return 0;
+    return /705/.test(rigModelName) ? 0 : scopeRefDb * SPECT_REF_GAIN;
+}
+
+// Palette index for one wave-data count: the REF-shifted floor paints the
+// palette's floor pin and the ramp climbs linearly count-for-dB through
+// WF_WINDOW_DB; below-floor dips are compressed toward black.
+function wfColorIndex(amp) {
+    var cpd = spectCountsPerDb();
+    var u = (amp + scopeDisplayRefDb() * cpd) / (WF_WINDOW_DB * cpd);
+    var shaped = u < 0 ? -Math.pow(-u, 1.6) : u;
+    var ci = ((WF_FLOOR_T + shaped * (1 - WF_FLOOR_T)) * WF_LUT_MAX) | 0;
+    return ci < 0 ? 0 : (ci > WF_LUT_MAX ? WF_LUT_MAX : ci);
+}
+
+function wfFillBlank(d, from, to) {
+    var c = colorTable[0];
+    for (var i = from; i < to; i += 4) { d[i] = c[0]; d[i+1] = c[1]; d[i+2] = c[2]; d[i+3] = 255; }
+}
+
+function loadScopeSettings() {
+    try {
+        var t = localStorage.getItem('wfTracking');
+        if (t === 'track' || t === 'fixed') wfTracking = t;
+        var r = localStorage.getItem('wfScopeRef');
+        if (r !== null && r !== '') {
+            var v = parseFloat(r);
+            if (!isNaN(v)) scopeRefDb = Math.max(-20, Math.min(20, v));
+        }
+        var sp = localStorage.getItem('wfSpeed');
+        if (WF_SPEED_ROWS[sp]) wfSpeed = sp;
+    } catch (e) {}
+    setWfTracking(wfTracking, true);
+    setWfSpeed(wfSpeed, true);
+    updateScopeRefUi();
+}
+
+// Waterfall speed: rows per sweep here, and the rig's own scope speed
+// (0x27 0x1A) so its screen scrolls at the same pace.
+function setWfSpeed(sp, quiet) {
+    wfSpeed = WF_SPEED_ROWS[sp] ? sp : 'mid';
+    var ids = { slow: 'wfSpeedSlowBtn', mid: 'wfSpeedMidBtn', fast: 'wfSpeedFastBtn' };
+    for (var k in ids) { var b = document.getElementById(ids[k]); if (b) b.classList.toggle('active', k === wfSpeed); }
+    if (quiet) return;
+    try { localStorage.setItem('wfSpeed', wfSpeed); } catch (e) {}
+    send({ cmd: 'setScopeSpeed', value: WF_SPEED_CIV[wfSpeed] });
+}
+
+function setWfTracking(mode, quiet) {
+    wfTracking = mode === 'track' ? 'track' : 'fixed';
+    var fb = document.getElementById('wfTrackFixedBtn'), tb = document.getElementById('wfTrackTrackBtn');
+    if (fb) fb.classList.toggle('active', wfTracking === 'fixed');
+    if (tb) tb.classList.toggle('active', wfTracking === 'track');
+    // FIXED: nothing slides and nothing pauses, even mid-drag.
+    if (wfTracking === 'fixed') { scopeSetVisualPan(0); scopeFreezeDuringDrag = false; }
+    if (!quiet) { try { localStorage.setItem('wfTracking', wfTracking); } catch (e) {} }
+}
+
+// REF: null = AUTO (the rig sits at 0.0 dB and the browser dials the
+// reference itself from the noise floor). A value pins the shift and is
+// commanded to the rig (0x27 0x19, tenths of a dB) so its screen matches.
+function setScopeRef(db) {
+    scopeRefDb = (db === null || db === undefined) ? null : Math.max(-20, Math.min(20, db));
+    try {
+        if (scopeRefDb === null) localStorage.removeItem('wfScopeRef');
+        else localStorage.setItem('wfScopeRef', String(scopeRefDb));
+    } catch (e) {}
+    send({ cmd: 'setScopeRef', value: Math.round((scopeRefDb || 0) * 10) });
+    updateScopeRefUi();
+}
+function stepScopeRef(dir) { setScopeRef((scopeRefDb || 0) + dir * 2.5); }
+// Re-command the browser's scope picks when the rig (re)connects: the
+// rig's own values survive a wfweb restart, ours have to be put back.
+function scopeRigAssert() {
+    if (scopeRefDb !== null) send({ cmd: 'setScopeRef', value: Math.round(scopeRefDb * 10) });
+    send({ cmd: 'setScopeSpeed', value: WF_SPEED_CIV[wfSpeed] });
+}
+function updateScopeRefUi() {
+    var val = document.getElementById('scopeRefValue');
+    if (val) {
+        val.textContent = scopeRefDb === null ? 'AUTO'
+            : (scopeRefDb > 0 ? '+' : '') + scopeRefDb.toFixed(1) + ' dB';
+    }
+    var auto = document.getElementById('scopeRefAutoBtn');
+    if (auto) auto.classList.toggle('active', scopeRefDb === null);
 }
 
 function resizeCanvases() {
@@ -6331,8 +6529,8 @@ function initWaterfallBuffer(dataLen) {
     wfOffCanvas.width = dataLen; wfOffCanvas.height = h;
     wfOffCtx = wfOffCanvas.getContext('2d');
     wfImageData = wfOffCtx.createImageData(dataLen, h);
-    var d = wfImageData.data;
-    for (var i = 3; i < d.length; i += 4) d[i] = 255;
+    wfFillBlank(wfImageData.data, 0, wfImageData.data.length);
+    wfBufDirty = true;
 }
 
 function handleBinaryMessage(buffer) {
@@ -6368,6 +6566,8 @@ function handleBinaryMessage(buffer) {
 
     shiftWaterfallForFreqChange();
     updateWaterfallRow();
+    spectUpdateHold();
+    spectBeginTween();
     if (!spectRenderPending) { spectRenderPending = true; requestAnimationFrame(renderScope); }
 }
 
@@ -6375,13 +6575,22 @@ function shiftWaterfallForFreqChange() {
     if (!wfImageData || prevSpectStartFreq === 0 || prevSpectEndFreq === 0) return;
     var curSpan = spectEndFreq - spectStartFreq;
     if (curSpan <= 0) return;
-    var shiftPixels = Math.round((prevSpectStartFreq - spectStartFreq) / curSpan * wfImageData.width);
-    if (shiftPixels === 0) return;
     var w = wfImageData.width, d = wfImageData.data, rowBytes = w * 4;
+    wfBufDirty = true;
+    if (Math.abs((prevSpectEndFreq - prevSpectStartFreq) - curSpan) > curSpan * 1e-3) {
+        // Span changed: the history is at another scale, start over like the rig does.
+        wfFillBlank(d, 0, d.length);
+        return;
+    }
+    // FIXED leaves the history where it was painted (the rig's own behaviour);
+    // only TRACK pans it so the frequencies still in view stay aligned.
+    if (wfTracking !== 'track') return;
+    var shiftPixels = Math.round((prevSpectStartFreq - spectStartFreq) / curSpan * w);
+    if (shiftPixels === 0) return;
     var absShift = Math.min(Math.abs(shiftPixels), w);
     if (absShift >= w) {
         // Frequency jumped too far — clear entire waterfall
-        for (var i = 0; i < d.length; i += 4) { d[i] = 0; d[i+1] = 0; d[i+2] = 0; d[i+3] = 255; }
+        wfFillBlank(d, 0, d.length);
         return;
     }
     var h = wfImageData.height;
@@ -6390,55 +6599,131 @@ function shiftWaterfallForFreqChange() {
         if (shiftPixels < 0) {
             // Tuned up: old data shifts left, blank on right
             d.copyWithin(rs, rs + absShift * 4, rs + rowBytes);
-            for (var i = rs + (w - absShift) * 4; i < rs + rowBytes; i += 4) { d[i] = 0; d[i+1] = 0; d[i+2] = 0; d[i+3] = 255; }
+            wfFillBlank(d, rs + (w - absShift) * 4, rs + rowBytes);
         } else {
             // Tuned down: old data shifts right, blank on left
             d.copyWithin(rs + absShift * 4, rs, rs + (w - absShift) * 4);
-            for (var i = rs; i < rs + absShift * 4; i += 4) { d[i] = 0; d[i+1] = 0; d[i+2] = 0; d[i+3] = 255; }
+            wfFillBlank(d, rs, rs + absShift * 4);
         }
     }
 }
 
-// Automatic waterfall reference level. The rig's scope amplitudes are
-// log-scaled and the per-bin noise floor rises with span, so a fixed
-// amp->color map saturates to yellow at wide spans. Anchor the palette to
-// the measured noise floor instead: each row's floor (25th percentile,
-// EMA-smoothed) maps to a fixed deep-blue index and signals color by
-// strength above it, which is span-independent.
-var wfAutoFloor = -1;
-var WF_FLOOR_CI = 24; // color index the noise floor maps to
-
-function wfEstimateFloor() {
-    var hist = new Uint32Array(256), len = spectData.length;
+// AUTO reference level: the REF an operator would have dialed to seat the
+// noise floor on the palette floor, in the rig's own 2.5 dB steps. The
+// per-bin noise floor rises with span (median jumps ~8 -> 64 counts from
+// 2.5 kHz to 500 kHz), so the tracked floor snaps on big jumps and is
+// otherwise EMA-smoothed; the pick itself is re-dialed only once the floor
+// has drifted past what sweep jitter explains, so the picture holds still.
+function wfUpdateAutoRef() {
+    var len = spectData.length;
+    if (!len) return;
+    var hist = new Uint32Array(256);
     for (var i = 0; i < len; i++) hist[spectData[i]]++;
-    var target = len >> 2, acc = 0;
-    for (var v = 0; v < 256; v++) { acc += hist[v]; if (acc >= target) return v; }
-    return 0;
+    var target = Math.max(1, (len * 15 / 100) | 0), acc = 0, floorNow = 0;
+    for (var v = 0; v < 256; v++) { acc += hist[v]; if (acc >= target) { floorNow = v; break; } }
+    if (!wfFloorCalibrated || Math.abs(floorNow - wfEmaFloor) > 15) { wfEmaFloor = floorNow; wfFloorCalibrated = true; }
+    else wfEmaFloor += (floorNow - wfEmaFloor) * 0.08;
+    var wanted = -wfEmaFloor / spectCountsPerDb();
+    if (!wfAutoRefCalibrated || Math.abs(wanted - wfAutoRefDb) > 4) {
+        wfAutoRefDb = Math.round(wanted / 2.5) * 2.5;
+        wfAutoRefCalibrated = true;
+    }
 }
 
 function updateWaterfallRow() {
     if (!wfImageData || !spectData) return;
-    var floorNow = wfEstimateFloor();
-    if (wfAutoFloor < 0 || Math.abs(floorNow - wfAutoFloor) > 20) wfAutoFloor = floorNow;
-    else wfAutoFloor += (floorNow - wfAutoFloor) * 0.1;
-    var scale = 255 / spectAmpMax;
-    var w = wfImageData.width, d = wfImageData.data;
-    d.copyWithin(w * 4, 0, d.length - w * 4);
-    for (var i = 0; i < w; i++) {
-        var amp = i < spectData.length ? spectData[i] : 0;
-        var ci = Math.round((amp - wfAutoFloor) * scale) + WF_FLOOR_CI;
-        if (ci < 0) ci = 0; else if (ci > 255) ci = 255;
-        var c = colorTable[ci];
-        var idx = i * 4;
-        d[idx] = c[0]; d[idx+1] = c[1]; d[idx+2] = c[2]; d[idx+3] = 255;
+    wfUpdateAutoRef();
+    var w = wfImageData.width, d = wfImageData.data, len = spectData.length;
+    // SPEED: n rows per sweep. Row 0 is the new sweep; the rows under it
+    // blend toward the previous sweep so the scroll stays smooth.
+    var n = Math.max(1, Math.min(WF_SPEED_ROWS[wfSpeed] || 1, wfImageData.height));
+    var prev = (wfPrevSweep && wfPrevSweep.length === len) ? wfPrevSweep : null;
+    d.copyWithin(w * 4 * n, 0, d.length - w * 4 * n);
+    for (var row = 0; row < n; row++) {
+        var alpha = (n - row) / n, rs = row * w * 4;
+        for (var i = 0; i < w; i++) {
+            var amp = i < len ? spectData[i] : 0;
+            if (row > 0 && prev && i < len) amp = prev[i] + (amp - prev[i]) * alpha;
+            var c = colorTable[wfColorIndex(amp)];
+            var idx = rs + i * 4;
+            d[idx] = c[0]; d[idx+1] = c[1]; d[idx+2] = c[2]; d[idx+3] = 255;
+        }
     }
+    wfPrevSweep = new Uint8Array(spectData);
+    wfScrollRows = n;
+    wfBufDirty = true;
+}
+
+// Grey afterglow behind the trace: per-bin maxima of the last few seconds
+// of sweeps, so a signal that keys up leaves a ghost where it stood until
+// the hold time ages it out. Reset when the window moves.
+function spectUpdateHold() {
+    var now = performance.now();
+    if (spectHoldStart !== spectStartFreq || spectHoldEnd !== spectEndFreq ||
+        (spectHold.length && spectHold[spectHold.length - 1].data.length !== spectData.length)) {
+        spectHold.length = 0;
+        spectHoldStart = spectStartFreq; spectHoldEnd = spectEndFreq;
+    }
+    spectHold.push({ t: now, data: new Uint8Array(spectData) });
+    while (spectHold.length && now - spectHold[0].t > SPECT_HOLD_MS) spectHold.shift();
+}
+
+// Start easing the drawn trace from where it is toward the sweep that just
+// arrived. A moved window (tune, span) snaps instead — easing across a QSY
+// would smear signals sideways.
+function spectBeginTween() {
+    var now = performance.now(), len = spectData.length;
+    if (spectLastSweepAt) {
+        var gap = Math.max(40, Math.min(500, now - spectLastSweepAt));
+        scopeSweepGapMs += (gap - scopeSweepGapMs) * 0.3;
+    }
+    spectTweenMs = Math.max(60, Math.min(300, scopeSweepGapMs * 0.85));
+    spectLastSweepAt = now;
+    var jump = !spectShown || spectShown.length !== len ||
+        spectStartFreq !== prevSpectStartFreq || spectEndFreq !== prevSpectEndFreq;
+    if (jump) {
+        spectShown = Float32Array.from(spectData);
+        spectFrom = Float32Array.from(spectData);
+        spectTweenStart = 0;
+        return;
+    }
+    spectFrom.set(spectShown);
+    spectTweenStart = now;
+}
+
+// Advance the ease: returns true while there is still motion to draw.
+function spectAdvanceTween() {
+    var len = spectData.length;
+    if (!spectShown || spectShown.length !== len) { spectShown = Float32Array.from(spectData); return false; }
+    if (!spectTweenStart) { spectShown.set(spectData); return false; }
+    var t = (performance.now() - spectTweenStart) / spectTweenMs;
+    if (t >= 1) { spectShown.set(spectData); spectTweenStart = 0; return false; }
+    var e = t * (2 - t); // ease-out
+    for (var i = 0; i < len; i++) spectShown[i] = spectFrom[i] + (spectData[i] - spectFrom[i]) * e;
+    return true;
+}
+
+// Animation between sweeps: the trace eases and the waterfall slides.
+// Runs only while either is still in motion.
+function scopeScheduleAnim() {
+    if (spectTweenPending) return;
+    spectTweenPending = true;
+    requestAnimationFrame(scopeAnimFrame);
+}
+function scopeAnimFrame() {
+    spectTweenPending = false;
+    if (spectRenderPending || !spectData || !spectData.length) return; // a full render is coming anyway
+    var more = drawSpectrum();
+    if (drawWaterfall()) more = true;
+    if (more) scopeScheduleAnim();
 }
 
 function renderScope() {
     spectRenderPending = false;
     if (!spectData || spectData.length === 0) return;
-    drawSpectrum();
-    drawWaterfall();
+    var more = drawSpectrum();
+    if (drawWaterfall()) more = true;
+    if (more) scopeScheduleAnim();
 }
 
 function drawSpectrum() {
@@ -6448,35 +6733,58 @@ function drawSpectrum() {
     var labelH = 14, plotH = h - labelH;
 
     ctx.clearRect(0, 0, w, h);
-    ctx.fillStyle = '#050510';
+    ctx.fillStyle = '#05070c';
     ctx.fillRect(0, 0, w, h);
 
-    // Grid
-    ctx.strokeStyle = 'rgba(255,255,255,0.04)';
-    ctx.lineWidth = 1;
-    for (var gi = 1; gi < 4; gi++) {
-        var gy = (plotH / 4) * gi;
-        ctx.beginPath(); ctx.moveTo(0, gy); ctx.lineTo(w, gy); ctx.stroke();
-    }
-
-    // Fill
-    ctx.beginPath(); ctx.moveTo(0, plotH);
-    for (var i = 0; i < len; i++) {
-        ctx.lineTo((i / (len - 1)) * w, plotH - (spectData[i] / spectAmpMax) * plotH);
-    }
-    ctx.lineTo(w, plotH); ctx.closePath();
-    ctx.fillStyle = 'rgba(0, 200, 200, 0.08)';
-    ctx.fill();
-
-    // Line
+    // Faint grid, like the rig's scope
+    ctx.strokeStyle = 'rgba(150,171,191,0.10)';
+    ctx.lineWidth = 0.7;
     ctx.beginPath();
-    for (var j = 0; j < len; j++) {
-        var lx = (j / (len - 1)) * w, ly = plotH - (spectData[j] / spectAmpMax) * plotH;
-        if (j === 0) ctx.moveTo(lx, ly); else ctx.lineTo(lx, ly);
-    }
-    ctx.strokeStyle = '#0bb';
-    ctx.lineWidth = 1.2;
+    for (var gi = 1; gi < 3; gi++) { var gy = (plotH / 3) * gi; ctx.moveTo(0, gy); ctx.lineTo(w, gy); }
+    for (var gx = 1; gx < 8; gx++) { var gxx = (w / 8) * gx; ctx.moveTo(gxx, 0); ctx.lineTo(gxx, plotH); }
     ctx.stroke();
+
+    // Y scale: the rig's fixed scale (spectAmpMax counts ≈ 45 dB), with
+    // the tracked noise floor seated AT the axis like the rig's own trace:
+    // the lower half of the band noise sits below it, only the noise peaks
+    // poke up as grass with dark gaps between them, and a manual REF
+    // nudges the whole thing (see spectRefShiftDb). Bars rise from the
+    // axis — nothing solid is painted under the grass.
+    var floor = wfEmaFloor + 2 - spectRefShiftDb() * spectCountsPerDb();
+    var stepX = w / len;
+    function barY(amp) {
+        var t = (amp - floor) / spectAmpMax;
+        if (t < 0) t = 0; else if (t > 1) t = 1;
+        return plotH * (1 - 0.94 * t);
+    }
+
+    // Grey peak-hold afterglow behind the trace
+    if (spectHold.length > 1) {
+        ctx.fillStyle = 'rgba(102,112,122,0.55)';
+        ctx.beginPath();
+        for (var hi = 0; hi < len; hi++) {
+            var peak = 0;
+            for (var hs = 0; hs < spectHold.length; hs++) {
+                var hd = spectHold[hs].data;
+                if (hd.length === len && hd[hi] > peak) peak = hd[hi];
+            }
+            var hy = barY(peak);
+            ctx.rect(hi * stepX, hy, stepX, plotH - hy);
+        }
+        ctx.fill();
+    }
+
+    // The live sweep, one solid bar per bin like the rig's own trace — the
+    // bar texture IS the per-bin grass. Eased toward the newest sweep
+    // between arrivals (spectAdvanceTween); no smoothing across bins.
+    var easing = spectAdvanceTween();
+    ctx.fillStyle = 'rgb(237,242,247)';
+    ctx.beginPath();
+    for (var i = 0; i < len; i++) {
+        var by = barY(spectShown[i]);
+        ctx.rect(i * stepX, by, stepX, plotH - by);
+    }
+    ctx.fill();
 
     // Passband indicator bar (anchored to spectrum center, independent of currentFreq)
     if (currentFilterWidth > 0 && spectStartFreq > 0 && spectEndFreq > spectStartFreq) {
@@ -6532,16 +6840,26 @@ function drawSpectrum() {
             ctx.fillText(label, frac * w, plotH + 2);
         }
     }
+    return easing;
 }
 
 function drawWaterfall() {
-    if (!wfImageData || !wfOffCtx) return;
+    if (!wfImageData || !wfOffCtx) return false;
     var canvas = document.getElementById('waterfallCanvas');
     var ctx = canvas.getContext('2d');
     var w = canvas.width, h = canvas.height;
-    wfOffCtx.putImageData(wfImageData, 0, 0);
-    ctx.imageSmoothingEnabled = false;
-    ctx.drawImage(wfOffCanvas, 0, 0, w, h);
+    if (wfBufDirty) { wfOffCtx.putImageData(wfImageData, 0, 0); wfBufDirty = false; }
+    // Slide: how far into the current sweep interval we are decides how far
+    // down the picture has drifted (0 .. rows-per-sweep). Bilinear so the
+    // sub-pixel motion is real, not a snap to whole device pixels.
+    var p = spectLastSweepAt ? (performance.now() - spectLastSweepAt) / scopeSweepGapMs : 1;
+    if (p > 1) p = 1; else if (p < 0) p = 0;
+    var offset = p * wfScrollRows * (h / wfImageData.height);
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(wfOffCanvas, 0, offset, w, h);
+    // The strip uncovered at the top is the newest row, stretched: it grows
+    // until the next sweep's rows replace it in place.
+    if (offset > 0) ctx.drawImage(wfOffCanvas, 0, 0, wfImageData.width, 1, 0, 0, w, offset + 0.5);
 
     // Passband indicator bar (anchored to spectrum center)
     if (currentFilterWidth > 0 && spectStartFreq > 0 && spectEndFreq > spectStartFreq) {
@@ -6575,7 +6893,7 @@ function drawWaterfall() {
         ctx.lineWidth = 1;
         ctx.beginPath(); ctx.moveTo(xPos, 0); ctx.lineTo(xPos, h); ctx.stroke();
     }
-
+    return p < 1;
 }
 
 function scopeFreqFromClientX(target, clientX) {
@@ -6642,7 +6960,10 @@ function scopePointerDown(e) {
     scopeDragRectLeft = rect.left;
     scopeDragRectWidth = rect.width;
     scopeSetVisualPan(0);
-    scopeFreezeDuringDrag = true;
+    // TRACK grabs the band: the canvases slide under the finger and the
+    // sweeps pause until release. FIXED is the rig's glass — it never moves
+    // and never stops, the drag only turns the dial.
+    scopeFreezeDuringDrag = (wfTracking === 'track');
 
     if (scopeDragCanvas.setPointerCapture) {
         try { scopeDragCanvas.setPointerCapture(e.pointerId); } catch (err) {}
@@ -6666,7 +6987,7 @@ function scopePointerMove(e) {
         scopeDragMoved = true;
     }
 
-    scopeSetVisualPan(deltaX);
+    if (wfTracking === 'track') scopeSetVisualPan(deltaX);
 
     if (scopeDragMoved) {
         if (now - scopeDragLastTuneTime >= 35) {
@@ -10211,6 +10532,7 @@ console.log('=== WFWEB starting (server version available after rigInfo) ===');
 
 setMobileViewportHeight();
 buildColorTable();
+loadScopeSettings();
 initSliderTracking();
 initCWHandlers();
 initDigiHandlers();
