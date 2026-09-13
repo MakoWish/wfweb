@@ -1,4 +1,5 @@
 #include <emscripten.h>
+#include <cstdint>
 #include <cstring>
 #include <vector>
 #include <string>
@@ -9,6 +10,37 @@ static GGMorse* g_ggMorse = nullptr;
 static std::vector<float> g_buffer;
 static std::string g_newText;
 static float g_sampleRate = 3200.0f;
+
+// ---- Prosigns ------------------------------------------------------------
+// ggmorse's built-in alphabet maps every pattern to a single character, so the
+// run-together prosigns either land on punctuation (".-.-." -> '+') or are
+// missing entirely and decode as '?'.  setCharacter() re-keys those patterns
+// onto sentinel bytes, which ggmorse_decode() then expands to <AR>, <SK>, ...
+// Patterns are ggmorse's own notation: 0 = dot, 1 = dash.
+struct Prosign {
+    const char*   pattern;
+    std::uint8_t  sentinel;
+    const char*   text;
+};
+
+static const Prosign kProsigns[] = {
+    { "01010",    0x01, "<AR>" },   // . - . - .      end of message
+    { "01000",    0x02, "<AS>" },   // . - . . .      wait
+    { "1000101",  0x03, "<BK>" },   // - . . . - . -  break
+    { "10001",    0x04, "<BT>" },   // - . . . -      separator / new paragraph
+    { "10101",    0x05, "<CT>" },   // - . - . -      attention
+    { "00000000", 0x06, "<HH>" },   // . . . . . . . . correction
+    { "10110",    0x07, "<KN>" },   // - . - - .      go ahead, named station only
+    { "000101",   0x08, "<SK>" },   // . . . - . -    end of contact
+    { "00010",    0x09, "<SN>" },   // . . . - .      understood
+};
+
+static const char* prosignText(std::uint8_t byte) {
+    for (const auto & p : kProsigns) {
+        if (p.sentinel == byte) return p.text;
+    }
+    return nullptr;
+}
 
 static void createInstance(float sampleRate) {
     delete g_ggMorse;
@@ -28,6 +60,10 @@ static void createInstance(float sampleRate) {
     paramsDecode.frequencyRangeMin_hz = 200.0f;
     paramsDecode.frequencyRangeMax_hz = 1200.0f;
     g_ggMorse->setParametersDecode(paramsDecode);
+
+    for (const auto & p : kProsigns) {
+        g_ggMorse->setCharacter(p.pattern, (char) p.sentinel);
+    }
 }
 
 extern "C" {
@@ -81,7 +117,9 @@ int ggmorse_decode() {
     int nNew = g_ggMorse->takeRxData(rxData);
     if (nNew > 0) {
         for (auto byte : rxData) {
-            if (byte >= 32 && byte < 128) {
+            if (const char* text = prosignText(byte)) {
+                g_newText += text;
+            } else if (byte >= 32 && byte < 128) {
                 g_newText += (char)byte;
             }
         }

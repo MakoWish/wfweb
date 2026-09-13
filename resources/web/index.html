@@ -7487,6 +7487,52 @@ function hideMacroEditor() {
 // CW transmission state
 var cwTransmitStartTime = 0; // Wall-clock time when current CW transmission started
 
+// Morse patterns for the TX progress transcript.  The radio's own memory keyer
+// does the keying (CI-V 0x17); this table only times the character highlighting,
+// so it has to agree with what the rig will actually send.
+//
+// Prosigns are typed <AR> / <SK> / ... in the input box and count as ONE unit
+// here.  cwToRig() rewrites them to the Icom keyer's "^XX" form, which sends the
+// two letters with no inter-character space.
+var CW_MORSE = {
+    'A': '.-', 'B': '-...', 'C': '-.-.', 'D': '-..', 'E': '.', 'F': '..-.',
+    'G': '--.', 'H': '....', 'I': '..', 'J': '.---', 'K': '-.-', 'L': '.-..',
+    'M': '--', 'N': '-.', 'O': '---', 'P': '.--.', 'Q': '--.-', 'R': '.-.',
+    'S': '...', 'T': '-', 'U': '..-', 'V': '...-', 'W': '.--', 'X': '-..-',
+    'Y': '-.--', 'Z': '--..', '0': '-----', '1': '.----', '2': '..---',
+    '3': '...--', '4': '....-', '5': '.....', '6': '-....', '7': '--...',
+    '8': '---..', '9': '----.', '.': '.-.-.-', ',': '--..--', '?': '..--..',
+    '/': '-..-.', '=': '-...-', '+': '.-.-.', ' ': ' ',
+    '<AR>': '.-.-.', '<AS>': '.-...', '<BK>': '-...-.-', '<BT>': '-...-',
+    '<CT>': '-.-.-', '<HH>': '........', '<KN>': '-.--.', '<SK>': '...-.-',
+    '<SN>': '...-.'
+};
+
+// Split CW text into transcript units: a known <XX> prosign is one unit, every
+// other character is its own.  sendCWText() and scheduleCharacterUpdates() must
+// tokenize identically or the highlight indices drift out of step.
+function cwTokenize(text) {
+    var out = [];
+    var re = /<[A-Z]{2}>/g;
+    var last = 0;
+    var m;
+    while ((m = re.exec(text)) !== null) {
+        if (!CW_MORSE[m[0]]) continue;   // unknown <XX>: falls through as plain chars
+        for (var i = last; i < m.index; i++) out.push(text[i]);
+        out.push(m[0]);
+        last = re.lastIndex;
+    }
+    for (var j = last; j < text.length; j++) out.push(text[j]);
+    return out;
+}
+
+// Rewrite <XX> prosigns into the "^XX" form the Icom keyer understands.
+function cwToRig(text) {
+    return text.replace(/<([A-Z]{2})>/g, function(whole, pair) {
+        return CW_MORSE[whole] ? '^' + pair : whole;
+    });
+}
+
 function playCWSidetone(text, startIndex) {
     // Radio sidetone mode: no local sidetone generation
     // Just schedule character status updates for the transcript display
@@ -7498,16 +7544,7 @@ function scheduleCharacterUpdates(text, startIndex) {
     // Schedule their status updates using wall-clock time so appended
     // transmissions continue seamlessly from the current progress.
 
-    var morse = {
-        'A': '.-', 'B': '-...', 'C': '-.-.', 'D': '-..', 'E': '.', 'F': '..-.',
-        'G': '--.', 'H': '....', 'I': '..', 'J': '.---', 'K': '-.-', 'L': '.-..',
-        'M': '--', 'N': '-.', 'O': '---', 'P': '.--.', 'Q': '--.-', 'R': '.-.',
-        'S': '...', 'T': '-', 'U': '..-', 'V': '...-', 'W': '.--', 'X': '-..-',
-        'Y': '-.--', 'Z': '--..', '0': '-----', '1': '.----', '2': '..---',
-        '3': '...--', '4': '....-', '5': '.....', '6': '-....', '7': '--...',
-        '8': '---..', '9': '----.', '.': '.-.-.-', ',': '--..--', '?': '..--..',
-        '/': '-..-.', '=': '-...-', '+': '.-.-.', ' ': ' '
-    };
+    var morse = CW_MORSE;
 
     var dotDuration = 1200 / cwSpeed;
     var dashDuration = dotDuration * 3;
@@ -7521,7 +7558,8 @@ function scheduleCharacterUpdates(text, startIndex) {
     var elapsed = now - cwTransmitStartTime;
 
     // Schedule updates for each character in this transmission
-    for (var i = 0; i < text.length && (startIndex + i) < cwCharacters.length; i++) {
+    var tokens = cwTokenize(text);
+    for (var i = 0; i < tokens.length && (startIndex + i) < cwCharacters.length; i++) {
         var charObj = cwCharacters[startIndex + i];
 
         (function(charObj) {
@@ -7619,7 +7657,8 @@ function updateCWTranscript() {
     for (var i = 0; i < cwCharacters.length; i++) {
         var ch = cwCharacters[i];
         var cls = 'cw-char ' + ch.status;
-        html += '<span class="' + cls + '">' + ch.char + '</span>';
+        var label = ch.char.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        html += '<span class="' + cls + '">' + label + '</span>';
     }
 
     display.innerHTML = html;
@@ -7634,16 +7673,7 @@ function sendCWText(text) {
     text = text.toUpperCase(); // Force uppercase for morse code
 
     // Calculate timing for each character
-    var morse = {
-        'A': '.-', 'B': '-...', 'C': '-.-.', 'D': '-..', 'E': '.', 'F': '..-.',
-        'G': '--.', 'H': '....', 'I': '..', 'J': '.---', 'K': '-.-', 'L': '.-..',
-        'M': '--', 'N': '-.', 'O': '---', 'P': '.--.', 'Q': '--.-', 'R': '.-.',
-        'S': '...', 'T': '-', 'U': '..-', 'V': '...-', 'W': '.--', 'X': '-..-',
-        'Y': '-.--', 'Z': '--..', '0': '-----', '1': '.----', '2': '..---',
-        '3': '...--', '4': '....-', '5': '.....', '6': '-....', '7': '--...',
-        '8': '---..', '9': '----.', '.': '.-.-.-', ',': '--..--', '?': '..--..',
-        '/': '-..-.', '=': '-...-', '+': '.-.-.', ' ': ' '
-    };
+    var morse = CW_MORSE;
 
     var dotDuration = 1200 / cwSpeed;
     var dashDuration = dotDuration * 3;
@@ -7656,8 +7686,9 @@ function sendCWText(text) {
     var startIndex = cwCharacters.length; // Track where these characters start
 
     // Add characters with timing
-    for (var i = 0; i < text.length; i++) {
-        var char = text[i];
+    var tokens = cwTokenize(text);
+    for (var i = 0; i < tokens.length; i++) {
+        var char = tokens[i];
         var pattern = morse[char];
 
         cwCharacters.push({
@@ -7687,7 +7718,7 @@ function sendCWText(text) {
         cwTransmitStartTime = Date.now();
     }
 
-    send({ cmd: 'sendCW', text: text });
+    send({ cmd: 'sendCW', text: cwToRig(text) });
     playCWSidetone(text, startIndex); // Pass the starting index
     updateCWTranscript();
 }
