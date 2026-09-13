@@ -86,7 +86,8 @@ curl -s http://localhost:8081/api/v1/radio | jq .
     "preamps": [{"num": 1, "name": "Preamp 1"}, {"num": 2, "name": "Preamp 2"}],
     "bands": [{"num": 20, "name": "160m", "start": 1800000, "end": 2000000}, {"num": 6, "name": "2m", "start": 144000000, "end": 148000000}],
     "filters": [{"num": 1, "name": "FIL1"}, {"num": 2, "name": "FIL2"}, {"num": 3, "name": "FIL3"}],
-    "spans": [{"reg": 1, "name": "±2.5kHz", "freq": 5000}]
+    "spans": [{"reg": 1, "name": "±2.5kHz", "freq": 5000}],
+    "txMeters": [{"kind": "swr", "cal": [[0, 1.0], [48, 1.5], [120, 3.0], [241, 6.0]], "red": 3.0}]
   },
   "status": {
     "frequency": 14200000,
@@ -283,7 +284,8 @@ curl -s -X PUT http://localhost:8081/api/v1/radio/ptt \
 
 ### GET /api/v1/radio/meters
 
-Read-only. S-meter, TX power, and SWR.
+Read-only. S-meter, TX power, SWR, ALC, plus whichever of Comp/Vd/Id is
+currently selected (see `setTxMeter` below).
 
 ```bash
 curl -s http://localhost:8081/api/v1/radio/meters | jq .
@@ -291,13 +293,24 @@ curl -s http://localhost:8081/api/v1/radio/meters | jq .
 
 **Response:**
 ```json
-{"sMeter": 54.0, "powerMeter": 0.0, "swrMeter": 1.0}
+{"sMeter": 54.0, "powerMeter": 0.0, "swrMeter": 1.0, "alcMeter": 0.0}
 ```
 
 **Calibration notes:**
 - `sMeter`: 0 = S9; each S-unit = 6 units (so S8 ≈ -6, S7 ≈ -12, etc.)
 - `swrMeter`: ratio 1.0–6.0
 - `powerMeter`: radio-dependent scaling
+- `compMeter` (dB), `vdMeter` (volts), `idMeter` (amps): present only while
+  that meter is the selected one — the radio is polled for one at a time.
+
+**Selecting the second meter:** the WebSocket command
+`{"cmd":"setTxMeter","value":"swr"|"alc"|"comp"|"vd"|"id"}` chooses which
+reading the browser's lower meter bar shows. `comp`, `vd` and `id` each start
+a poll of their own and stop the previous one; `swr` and `alc` are always
+polled, so selecting either just stops the extra poll. `info.txMeters` lists
+the readings the connected radio can produce, each with the rig's own
+calibration table (`[rigVal, reading]` pairs) and the reading at which its
+meter face turns red.
 
 ---
 

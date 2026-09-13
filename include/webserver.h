@@ -237,6 +237,11 @@ private:
     // (IC-705 with no AH-705 attached): hide the tuner until it answers.
     bool tunerRejected = false;
 
+    // Which meter the browser's second TX bar is showing. SWR and ALC are
+    // polled unconditionally, so only Comp/Vd/Id need a poll of their own —
+    // adding all three permanently would just starve the slower polls.
+    funcs txMeterFunc = funcNone;
+
     // Locally tracked active VFO/receiver. Mirrors cachingQueue::rigState.vfo
     // but is read/written entirely on webThread, so receiveCache() can route
     // funcSelectedFreq/funcUnselectedFreq without re-locking the queue mutex
@@ -596,6 +601,9 @@ private:
     void scheduleToneModeNotify();
     void addToneCaps(QJsonObject &o) const;
     void addBandCaps(QJsonObject &o) const;
+    void addTxMeterCaps(QJsonObject &o) const;
+    void addTxMeterReadings(QJsonObject &o) const;
+    void applyTxMeterPoll();
     void addToneStatus(QJsonObject &o);
     bool toneCommandsAvailable() const;
 };

@@ -508,6 +508,11 @@ void webServer::receiveRigCaps(rigCapabilities *caps)
         obj["powerOnNeedsRemoteJack"] = powerOnNeedsRemoteJack(rigCaps);
         addToneCaps(obj);
         addBandCaps(obj);
+        addTxMeterCaps(obj);
+        // A new rig may not have the meter the previous selection named.
+        if (txMeterFunc != funcNone && !rigCaps->commands.contains(txMeterFunc))
+            txMeterFunc = funcNone;
+        applyTxMeterPoll();
 
         QJsonArray modes;
         for (const modeInfo &mi : rigCaps->modes) {
@@ -1171,6 +1176,7 @@ void webServer::handleRestRequest(QTcpSocket *socket, const QString &method,
         if (swr.value.isValid()) resp["swrMeter"] = swr.value.toDouble();
         cacheItem alc = queue->getCache(funcALCMeter, 0);
         if (alc.value.isValid()) resp["alcMeter"] = alc.value.toDouble();
+        addTxMeterReadings(resp);
         sendRestResponse(socket, 200, resp);
         return;
     }
@@ -1943,6 +1949,18 @@ void webServer::handleCommand(QWebSocket *client, const QJsonObject &cmd)
         QTimer::singleShot(200, this, [this]() {
             if (queue) queue->add(priorityImmediate, funcTunerStatus, false, 0);
         });
+    }
+    else if (type == "setTxMeter") {
+        // Which reading the browser's second TX bar is showing. Only Comp/Vd/Id
+        // need a poll of their own — SWR and ALC are already polled.
+        QString kind = cmd["value"].toString();
+        funcs f = (kind == "comp") ? funcCompMeter
+                : (kind == "vd")   ? funcVdMeter
+                : (kind == "id")   ? funcIdMeter : funcNone;
+        if (f != txMeterFunc) {
+            txMeterFunc = f;
+            applyTxMeterPoll();
+        }
     }
     else if (type == "setAutoNotch") {
         bool on = cmd["value"].toBool();
@@ -3143,6 +3161,7 @@ QJsonObject webServer::buildInfoJson() const
         info["hasTuner"] = rigCaps->commands.contains(funcTunerStatus) && !tunerRejected;
         addToneCaps(info);
         addBandCaps(info);
+        addTxMeterCaps(info);
         if (!rigCaps->scopeCenterSpans.empty()) {
             QJsonArray spans;
             for (const centerSpanData &s : rigCaps->scopeCenterSpans) {
@@ -3344,6 +3363,9 @@ QJsonObject webServer::buildStatusJson()
     if (alc.value.isValid()) {
         status["alcMeter"] = alc.value.toDouble();
     }
+
+    // Switchable second TX bar (Comp / Vd / Id) — only one is ever polled.
+    addTxMeterReadings(status);
 
     // TX status
     cacheItem txStatus = queue->getCache(funcTransceiverStatus, 0);
@@ -3658,6 +3680,15 @@ void webServer::receiveCache(cacheItem item)
     case funcALCMeter:
         update["alcMeter"] = item.value.toDouble();
         break;
+    case funcCompMeter:
+        update["compMeter"] = item.value.toDouble();
+        break;
+    case funcVdMeter:
+        update["vdMeter"] = item.value.toDouble();
+        break;
+    case funcIdMeter:
+        update["idMeter"] = item.value.toDouble();
+        break;
     case funcTransceiverStatus:
         update["transmitting"] = item.value.toBool();
         if (freedvReporter) freedvReporter->updateTx(freedvModeName, item.value.toBool());
@@ -3891,6 +3922,8 @@ void webServer::sendPeriodicStatus()
     if (alc.value.isValid()) {
         status["alcMeter"] = alc.value.toDouble();
     }
+
+    addTxMeterReadings(status);
 
     cacheItem txStatus = queue->getCache(funcTransceiverStatus, 0);
     if (txStatus.value.isValid()) {
@@ -4265,6 +4298,78 @@ void webServer::addBandCaps(QJsonObject &o) const
         bands.append(bo);
     }
     o["bands"] = bands;
+}
+
+// The bottom bar of the browser's meter is switchable: SWR (default), ALC,
+// COMP, Vd and Id, the same set the rig's own multi-function meter offers.
+// Send one descriptor per meter the rig can actually drive, so the browser
+// never offers a reading this radio cannot produce.
+//
+// Each descriptor carries the rig's own calibration table ([rigVal, actual]
+// pairs straight out of the .rig file) plus the actual value where the red
+// zone starts. That is exactly what the rig prints on its meter face: the
+// bar is linear in the raw register value, and the table says which reading
+// each printed tick corresponds to. A meter with no table would read out raw
+// 0..255 counts, so it is left out rather than shown lying.
+void webServer::addTxMeterCaps(QJsonObject &o) const
+{
+    if (!rigCaps) return;
+    struct meterDesc { const char *kind; funcs func; meter_t meter; };
+    static const meterDesc meters[] = {
+        { "swr",  funcSWRMeter,  meterSWR     },
+        { "alc",  funcALCMeter,  meterALC     },
+        { "comp", funcCompMeter, meterComp    },
+        { "vd",   funcVdMeter,   meterVoltage },
+        { "id",   funcIdMeter,   meterCurrent },
+    };
+    QJsonArray list;
+    for (const meterDesc &d : meters) {
+        if (!rigCaps->commands.contains(d.func)) continue;
+        const QMap<int, double> &cal = rigCaps->meters[d.meter];
+        if (cal.isEmpty()) continue;
+        QJsonArray points;
+        for (auto it = cal.constBegin(); it != cal.constEnd(); ++it) {
+            QJsonArray pt;
+            pt.append(it.key());
+            pt.append(it.value());
+            points.append(pt);
+        }
+        QJsonObject m;
+        m["kind"] = d.kind;
+        m["cal"] = points;
+        // meterLines[] is only written for a cal point flagged RedLine.
+        if (rigCaps->meterLines[d.meter] != 0.0)
+            m["red"] = rigCaps->meterLines[d.meter];
+        list.append(m);
+    }
+    o["txMeters"] = list;
+}
+
+// The cached reading of whichever optional meter is currently polled. Only
+// one of the three is ever in the queue, so at most one key appears.
+void webServer::addTxMeterReadings(QJsonObject &o) const
+{
+    const char *key = (txMeterFunc == funcCompMeter) ? "compMeter"
+                    : (txMeterFunc == funcVdMeter)   ? "vdMeter"
+                    : (txMeterFunc == funcIdMeter)   ? "idMeter" : nullptr;
+    if (!queue || !key) return;
+    cacheItem c = queue->getCache(txMeterFunc, 0);
+    if (c.value.isValid()) o[key] = c.value.toDouble();
+}
+
+// Poll whichever of Comp/Vd/Id the browser's second TX bar is showing, and
+// drop the poll for the other two. SWR/ALC/power are polled unconditionally
+// elsewhere, so selecting them just clears the extra poll.
+void webServer::applyTxMeterPoll()
+{
+    if (!queue || !rigCaps) return;
+    static const funcs optional[] = { funcCompMeter, funcVdMeter, funcIdMeter };
+    for (funcs f : optional) {
+        if (f == txMeterFunc) continue;
+        queue->del(f, 0);
+    }
+    if (txMeterFunc != funcNone && rigCaps->commands.contains(txMeterFunc))
+        queue->addUnique(priorityHighest, queueItem(txMeterFunc, true, 0));
 }
 
 // What the browser needs to draw the TONE panel: which of the three tone kinds

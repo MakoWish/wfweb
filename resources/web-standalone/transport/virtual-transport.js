@@ -68,6 +68,27 @@
         return db;
     }
 
+    // Meter descriptors for the virtual rig, shaped like the ones the serial
+    // transport builds: the IC-705's calibration tables, which is also where
+    // the virtual band table comes from.
+    function virtualTxMeters() {
+        var entry = global.IcomRigCaps && global.IcomRigCaps[0xA4];
+        if (!entry || !entry.meters) return [];
+        var kinds = [['swr','swr'], ['alc','alc'], ['comp','comp'],
+                     ['vd','voltage'], ['id','current']];
+        var out = [];
+        for (var i = 0; i < kinds.length; i++) {
+            var cal = entry.meters[kinds[i][1]];
+            if (!cal || !cal.length) continue;
+            var red;
+            for (var j = 0; j < cal.length; j++) if (cal[j][2]) red = cal[j][1];
+            var d = { kind: kinds[i][0], cal: cal };
+            if (red !== undefined) d.red = red;
+            out.push(d);
+        }
+        return out;
+    }
+
     class VirtualRigTransport extends global.RigTransport {
         constructor(opts) {
             super();
@@ -485,6 +506,13 @@
                     powerMeter: frac * 100,
                     swrMeter: 1.0,
                     alcMeter: frac,
+                    // The switchable bottom meter borrows the IC-705's faces
+                    // (see _emitRigInfo), so give it plausible readings to
+                    // move: compression tracks the audio, supply sits at a
+                    // healthy 13.8 V and draws current with output power.
+                    compMeter: frac * 20,
+                    vdMeter: 13.8,
+                    idMeter: frac * 10,
                 });
                 return;
             }
@@ -554,6 +582,9 @@
                 // Same for the TUNE tile — the virtual rig echoes tuner
                 // state, so the bench can exercise it off-air.
                 hasTuner: true,
+                // Switchable bottom meter: borrow the IC-705's meter faces so
+                // the SWR / ALC / COMP / Vd / Id cycle can be exercised off-air.
+                txMeters: virtualTxMeters(),
                 // Repeater access tone, same treatment.
                 hasCTCSS: true,
                 hasDTCS: true,

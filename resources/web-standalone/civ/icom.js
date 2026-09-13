@@ -561,10 +561,13 @@
         return out;
     }
 
-    // ---------- TX meters (cmd 0x15 0x11/0x12/0x13) ----------------------
+    // ---------- TX meters (cmd 0x15 0x11..0x16) --------------------------
     function cmdReadPowerMeter() { return new Uint8Array([0x15, 0x11]); }
     function cmdReadSwrMeter()   { return new Uint8Array([0x15, 0x12]); }
     function cmdReadAlcMeter()   { return new Uint8Array([0x15, 0x13]); }
+    function cmdReadCompMeter()  { return new Uint8Array([0x15, 0x14]); }
+    function cmdReadVdMeter()    { return new Uint8Array([0x15, 0x15]); }
+    function cmdReadIdMeter()    { return new Uint8Array([0x15, 0x16]); }
     function parseTxMeterReply(payload, sub) {
         if (payload.length < 4 || payload[0] !== 0x15 || payload[1] !== sub) return null;
         return decodeBcdLevel(payload[2], payload[3]);
@@ -1409,6 +1412,9 @@
         cmdReadPowerMeter: cmdReadPowerMeter,
         cmdReadSwrMeter: cmdReadSwrMeter,
         cmdReadAlcMeter: cmdReadAlcMeter,
+        cmdReadCompMeter: cmdReadCompMeter,
+        cmdReadVdMeter: cmdReadVdMeter,
+        cmdReadIdMeter: cmdReadIdMeter,
         cmdSendCW: cmdSendCW,
         cmdStopCW: cmdStopCW,
         cmdSetScopeSpan: cmdSetScopeSpan,

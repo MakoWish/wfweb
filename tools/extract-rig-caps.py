@@ -32,6 +32,17 @@ REPO = Path(__file__).resolve().parent.parent
 RIGS_DIR = REPO / "rigs"
 OUT = REPO / "resources/web-standalone/civ/rig-caps.js"
 
+# Map .rig "<kind> Meter" command labels -> the SPA's switchable-meter kinds,
+# and the order the SPA cycles through them.
+TX_METER_CMDS = {
+    "SWR Meter":  "swr",
+    "ALC Meter":  "alc",
+    "Comp Meter": "comp",
+    "Vd Meter":   "vd",
+    "Id Meter":   "id",
+}
+TX_METER_ORDER = ["swr", "alc", "comp", "vd", "id"]
+
 # Map .rig "Meter=..." labels -> our JS field names.
 METER_FIELDS = {
     "S-Meter": "sMeter",
@@ -363,10 +374,13 @@ def extract_caps(props: dict[str, str], cmd_meta: dict[str, dict]) -> dict:
     has_tuner = False
     has_memory_mode = False
     tone_cmds: set[str] = set()
+    tx_meters: set[str] = set()
     pat = re.compile(r"^Rig/Commands\\(\d+)\\Type$")
     for k, v in props.items():
         if not pat.match(k):
             continue
+        if v.strip() in TX_METER_CMDS:
+            tx_meters.add(TX_METER_CMDS[v.strip()])
         if v.strip() == "Selected Freq":
             has_selected_freq = True
         elif v.strip() == "Send Freq Offset":
@@ -396,6 +410,9 @@ def extract_caps(props: dict[str, str], cmd_meta: dict[str, dict]) -> dict:
         "hasDTCS": (can_engage_tone and bool(extract_tones(props, "DTCS"))
                     and "DTCS Code/Polarity" in tone_cmds),
         "hasToneSqlType": "Tone Squelch Type" in tone_cmds,
+        # Which readings the rig's multi-function TX meter can produce. The
+        # SPA's switchable second meter bar offers exactly these.
+        "txMeters": [k for k in TX_METER_ORDER if k in tx_meters],
         # Memory channels. hasMemoryMode = the rig has a V/M switch (CI-V
         # 0x08), so the SPA can enter/leave memory mode. memGroups is the
         # highest group number and memStart the lowest channel/group (0 on
@@ -434,17 +451,24 @@ def extract_meters(props: dict[str, str]) -> dict[str, list[list[float]]]:
             act_val = float(e["ActualVal"])
         except (KeyError, ValueError):
             continue
-        meters[field].append((rig_val, act_val))
+        # RedLine marks the cal point where the rig's meter face turns red
+        # (S9, SWR 3, rated power, too much compression, over-voltage...).
+        # Carried as an optional third element so the interpolator, which
+        # only ever reads [0] and [1], is unaffected.
+        red = e.get("RedLine", "false").strip().lower() in ("true", "1")
+        meters[field].append((rig_val, act_val, red))
     # sort each table by rigVal; drop empties
     return {
-        f: [[rv, av] for rv, av in sorted(set(pts))]
+        f: [([rv, av, 1] if red else [rv, av]) for rv, av, red in sorted(set(pts))]
         for f, pts in meters.items()
         if pts
     }
 
 
 def js_pairs(pts: list[list[float]]) -> str:
-    return "[" + ",".join(f"[{rv},{av:g}]" for rv, av in pts) + "]"
+    return "[" + ",".join(
+        f"[{p[0]},{p[1]:g},1]" if len(p) > 2 else f"[{p[0]},{p[1]:g}]"
+        for p in pts) + "]"
 
 
 def js_meters(meters: dict[str, list[list[float]]]) -> str:
@@ -492,6 +516,8 @@ def js_caps(caps: dict) -> str:
     for k, v in caps.items():
         if isinstance(v, bool):
             parts.append(f"{k}:{'true' if v else 'false'}")
+        elif isinstance(v, list):
+            parts.append(f"{k}:[" + ",".join(js_string(x) for x in v) + "]")
         else:
             parts.append(f"{k}:{v}")
     return "{" + ",".join(parts) + "}"
@@ -556,10 +582,10 @@ def main() -> int:
         "// Each entry: civAddr -> { model, caps, meters, cmds, inputs, preamps, attenuators, antennas, bands, memFormat }",
         "//   caps:   { hasTransmit, hasSpectrum, hasLAN, numReceivers, numVFOs,",
         "//             hasCommand29, hasSelectedFreq, hasDuplex, hasTuner,",
-        "//             hasCTCSS, hasDTCS, hasToneSqlType,",
+        "//             hasCTCSS, hasDTCS, hasToneSqlType, txMeters,",
         "//             hasMemoryMode, memGroups, memStart, memories, memMax,",
         "//             vfoModeSelectCmd29 }",
-        "//   meters: { kind: [[rigVal, actualVal], ...] }",
+        "//   meters: { kind: [[rigVal, actualVal, redLine?], ...] }",
         "//           kinds: sMeter, swr, power, alc, comp, center, voltage, current",
         "//   cmds:   { modOff, modData1, modData2, modData3, antenna, rxAntenna,",
         "//             toneSqlType, rptTone, rptTsql, rptDtcs, toneFreq, tsqlFreq,",

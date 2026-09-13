@@ -80,6 +80,27 @@
         { num: 6, name: '±250k', hz: 250000 },
     ];
 
+    // 0x15 sub-command -> the SPA status field and the IcomRigCaps meter
+    // table used to calibrate it. Power/SWR/ALC are polled on every TX tick;
+    // Comp/Vd/Id only while the switchable second meter bar is showing them.
+    var TX_METER_SUBCMDS = {
+        0x11: { field: 'powerMeter', cal: 'power'   },
+        0x12: { field: 'swrMeter',   cal: 'swr'     },
+        0x13: { field: 'alcMeter',   cal: 'alc'     },
+        0x14: { field: 'compMeter',  cal: 'comp'    },
+        0x15: { field: 'vdMeter',    cal: 'voltage' },
+        0x16: { field: 'idMeter',    cal: 'current' },
+    };
+    // The switchable bar's kinds, in the order the SPA cycles them, mapped to
+    // their read command and the IcomRigCaps meter table that draws the face.
+    var TX_METER_KINDS = {
+        swr:  { read: 'cmdReadSwrMeter',  cal: 'swr'     },
+        alc:  { read: 'cmdReadAlcMeter',  cal: 'alc'     },
+        comp: { read: 'cmdReadCompMeter', cal: 'comp'    },
+        vd:   { read: 'cmdReadVdMeter',   cal: 'voltage' },
+        id:   { read: 'cmdReadIdMeter',   cal: 'current' },
+    };
+
     // Icom S-meter raw BCD (0..241) → dB relative to S9 (-54..+60), the
     // scale the SPA's drawSMeter() expects. Uses the per-rig table from
     // IcomRigCaps when available (rigs/IC-*.rig has per-model curves);
@@ -87,6 +108,27 @@
     function rawSMeterToDb(raw, civAddr) {
         var tbl = civ.getRigMeterTable(civAddr, 'sMeter');
         return civ.calMeter('sMeter', raw, tbl);
+    }
+
+    // Build the SPA's txMeters list for a rig: the meters whose command the
+    // .rig declares AND for which it carries a calibration table. Without a
+    // table a reading is raw 0..255 counts, which no face can label honestly,
+    // so that meter is left out rather than shown lying. Mirrors
+    // webServer::addTxMeterCaps() on the server fork.
+    function txMeterDescriptors(entry) {
+        var kinds = (entry && entry.caps && entry.caps.txMeters) || [];
+        var out = [];
+        for (var i = 0; i < kinds.length; i++) {
+            var spec = TX_METER_KINDS[kinds[i]];
+            var cal = spec && entry.meters && entry.meters[spec.cal];
+            if (!cal || !cal.length) continue;
+            var red;
+            for (var j = 0; j < cal.length; j++) if (cal[j][2]) red = cal[j][1];
+            var d = { kind: kinds[i], cal: cal };
+            if (red !== undefined) d.red = red;
+            out.push(d);
+        }
+        return out;
     }
 
     // SPA command name → 0x14 NN sub byte (analog levels 0..255)
@@ -281,6 +323,8 @@
             // Antenna tuner caps — true only for rigs whose .rig declares the
             // ATU command (CI-V 0x1C 0x01). Set in _finalizeDetection.
             this._hasTuner = false;
+            // Comp/Vd/Id when the SPA's switchable meter bar asks for one.
+            this._txMeterKind = null;
 
             // Repeater-tone command bytes, filled in by _finalizeDetection.
             // Rigs speak one of two dialects: `sqlType` (0x16 0x5D) carries
@@ -610,6 +654,13 @@
                     this._enqueue('equalizeVFO', civ.cmdEqualizeVFO());
                     this._enqueueDualVfoReads();
                     return;
+                case 'setTxMeter':
+                    // Which reading the SPA's second TX bar is showing. Only
+                    // Comp/Vd/Id cost an extra poll — SWR and ALC are already
+                    // read on every TX tick.
+                    this._txMeterKind = (obj.value === 'comp' || obj.value === 'vd'
+                                         || obj.value === 'id') ? obj.value : null;
+                    break;
                 case 'setSplit':
                     var sp = !!obj.value;
                     this.state.split = sp;
@@ -1566,17 +1617,16 @@
                 }
             }
 
-            // 0x15 NN — TX meters (power 0x11 / SWR 0x12 / ALC 0x13)
+            // 0x15 NN — TX meters (power 0x11 / SWR 0x12 / ALC 0x13 /
+            // Comp 0x14 / Vd 0x15 / Id 0x16)
             if (payload[0] === 0x15 && payload.length >= 4) {
                 var sub = payload[1];
-                var meterField = (sub === 0x11) ? 'powerMeter'
-                                : (sub === 0x12) ? 'swrMeter'
-                                : (sub === 0x13) ? 'alcMeter' : null;
-                if (meterField) {
+                var meterSpec = TX_METER_SUBCMDS[sub];
+                if (meterSpec) {
+                    var meterField = meterSpec.field;
                     var raw = civ.parseTxMeterReply(payload, sub);
                     if (raw !== null) {
-                        var calKind = (sub === 0x11) ? 'power'
-                                    : (sub === 0x12) ? 'swr' : 'alc';
+                        var calKind = meterSpec.cal;
                         var calTbl = civ.getRigMeterTable(this.civAddr, calKind);
                         var v = civ.calMeter(calKind, raw, calTbl);
                         if (this.state[meterField] !== v) {
@@ -2316,6 +2366,10 @@
                 hasMainSub: caps.numReceivers > 1,
                 hasDuplex: !!caps.hasDuplex,
                 hasTuner: !!caps.hasTuner,
+                // Switchable second meter bar: one descriptor per reading this
+                // rig can actually produce, carrying the rig's own calibration
+                // table so the SPA can draw the matching face.
+                txMeters: txMeterDescriptors(entry),
                 // Repeater access tone. canSet* is separate from hasCTCSS
                 // because a rig can engage a tone without exposing the 0x1B
                 // frequency register (IC-905), and tone scan additionally
@@ -2407,6 +2461,11 @@
                     this._enqueue('readPowerMeter', civ.cmdReadPowerMeter());
                     this._enqueue('readSwrMeter',   civ.cmdReadSwrMeter());
                     this._enqueue('readAlcMeter',   civ.cmdReadAlcMeter());
+                    // Whichever of Comp/Vd/Id the switchable bar is showing.
+                    // SWR and ALC are already above, so they need nothing extra.
+                    var extra = TX_METER_KINDS[this._txMeterKind];
+                    if (extra && civ[extra.read])
+                        this._enqueue('read_' + this._txMeterKind, civ[extra.read]());
                     // CW (and any rig-initiated TX) keys without a setPTT
                     // command, so we don't get a self-clearing edge. Poll PTT
                     // here to detect auto-unkey and flip back to S-meter.

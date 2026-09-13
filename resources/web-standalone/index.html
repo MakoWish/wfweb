@@ -266,6 +266,10 @@ html, body {
 }
 #meterCanvas {
     width: 100%; height: 64px;
+    /* Tapping the meter cycles the bottom row through the readings this
+       radio can produce, so it must not select text on a double-tap. */
+    -webkit-user-select: none; user-select: none;
+    -webkit-tap-highlight-color: transparent;
 }
 #freqSection {
     flex: 1;
@@ -2334,7 +2338,8 @@ body.digi-open #bottomBar { grid-row: 5; }
     <!-- Row 2: Meter + Frequency -->
     <div id="meterFreqRow">
         <div id="meterSection">
-            <canvas id="meterCanvas" width="500" height="128"></canvas>
+            <canvas id="meterCanvas" width="500" height="128"
+                    title="Tap to change the bottom meter"></canvas>
         </div>
         <div id="freqSection">
             <div id="vfoLine">
@@ -3380,6 +3385,7 @@ function handleMessage(msg) {
                 if (msg.hasDuplex !== undefined) hasDuplex = !!msg.hasDuplex;
                 updateToneCaps(msg);
                 if (msg.hasTuner !== undefined) updateHasTuner(!!msg.hasTuner);
+                if (msg.txMeters !== undefined) setTxMeterCaps(msg.txMeters);
                 if (msg.hasMemoryMode !== undefined) hasMemoryMode = !!msg.hasMemoryMode;
                 if (msg.memGroups !== undefined) setupMemoryGroups(msg.memGroups, msg.memStart || 0);
 
@@ -3410,6 +3416,7 @@ function handleMessage(msg) {
             if (msg.hasDuplex !== undefined) hasDuplex = !!msg.hasDuplex;
             updateToneCaps(msg);
             if (msg.hasTuner !== undefined) updateHasTuner(!!msg.hasTuner);
+            if (msg.txMeters !== undefined) setTxMeterCaps(msg.txMeters);
             if (msg.hasMemoryMode !== undefined) hasMemoryMode = !!msg.hasMemoryMode;
             if (msg.memGroups !== undefined) setupMemoryGroups(msg.memGroups, msg.memStart || 0);
             if (msg.hasPowerControl) document.getElementById('powerBtn').style.display = 'flex';
@@ -3486,6 +3493,9 @@ function handleMessage(msg) {
             if (msg.powerMeter !== undefined) updatePowerMeter(msg.powerMeter);
             if (msg.swrMeter !== undefined) updateSwrMeter(msg.swrMeter);
             if (msg.alcMeter !== undefined) updateALCMeter(msg.alcMeter);
+            if (msg.compMeter !== undefined) updateCompMeter(msg.compMeter);
+            if (msg.vdMeter !== undefined) updateVdMeter(msg.vdMeter);
+            if (msg.idMeter !== undefined) updateIdMeter(msg.idMeter);
             if (msg.transmitting !== undefined) updateTxStatus(msg.transmitting);
             if (msg.afGain !== undefined) updateSlider('afGain', msg.afGain);
             if (msg.rfGain !== undefined) updateSlider('rfGain', msg.rfGain);
@@ -3519,6 +3529,9 @@ function handleMessage(msg) {
             if (msg.powerMeter !== undefined) updatePowerMeter(msg.powerMeter);
             if (msg.swrMeter !== undefined) updateSwrMeter(msg.swrMeter);
             if (msg.alcMeter !== undefined) updateALCMeter(msg.alcMeter);
+            if (msg.compMeter !== undefined) updateCompMeter(msg.compMeter);
+            if (msg.vdMeter !== undefined) updateVdMeter(msg.vdMeter);
+            if (msg.idMeter !== undefined) updateIdMeter(msg.idMeter);
             if (msg.freedvSync !== undefined || msg.freedvSNR !== undefined) {
                 // Update stats values directly — avoid full updateFreeDVStatus
                 // which re-renders overlays and interferes with button clicks
@@ -4300,8 +4313,8 @@ var meterPeakCount = 0;         // held peak fill level (in segments)
 var meterPeakTs = 0;
 var txPoPeakCount = 0;          // TX Po bar peak hold
 var txPoPeakTs = 0;
-var txSwrPeakCount = 0;         // TX SWR bar peak hold
-var txSwrPeakTs = 0;
+var txAuxPeakCount = 0;         // TX bottom-bar peak hold
+var txAuxPeakTs = 0;
 
 var alcVal = 0;
 var digiTxGain = 0.25;         // FT8/FT4 audio gain multiplier (conservative start)
@@ -4316,6 +4329,194 @@ var ALC_EMA_ALPHA = 0.15;      // EMA smoothing factor (lower = smoother)
 function updateSMeter(val) { meterVal = val; if (!isTransmitting) drawMeter(); }
 function updatePowerMeter(val) { powerVal = val; if (isTransmitting) drawMeter(); }
 function updateSwrMeter(val) { swrVal = val; if (isTransmitting) drawMeter(); }
+
+// ---- Switchable bottom meter --------------------------------------------
+// The meter's bottom row is the radio's multi-function meter: SWR by default,
+// and a tap on the meter cycles to ALC / COMP / Vd / Id. During TX it reads
+// live; during RX it is ornamental and only says which reading is armed —
+// same as the face on the radio, which keeps showing the selection with the
+// pointer at rest. Power always owns the top row, so it is not in the cycle.
+//
+// Only readings this radio can actually produce are offered: the rig
+// capabilities carry one descriptor per available meter, each with the
+// radio's own calibration table so the face can be drawn to match.
+var txMeterKind = 'swr';
+try { txMeterKind = localStorage.getItem('wfTxMeter') || 'swr'; } catch (e) {}
+var txMeterCaps = [];        // [{kind, cal: [[rigVal, reading], ...], red}]
+var compVal = 0, vdVal = 0, idVal = 0;
+var TX_METER_LABELS = { swr: 'SWR', alc: 'ALC', comp: 'COMP', vd: 'Vd', id: 'Id' };
+var TX_METER_UNITS  = { swr: '', alc: '', comp: 'dB', vd: 'V', id: 'A' };
+
+function updateCompMeter(val) { compVal = val; if (isTransmitting) drawMeter(); }
+function updateVdMeter(val)   { vdVal = val;   if (isTransmitting) drawMeter(); }
+function updateIdMeter(val)   { idVal = val;   if (isTransmitting) drawMeter(); }
+
+function txMeterValue(kind) {
+    return kind === 'alc'  ? alcVal
+         : kind === 'comp' ? compVal
+         : kind === 'vd'   ? vdVal
+         : kind === 'id'   ? idVal : swrVal;
+}
+
+function txMeterDesc(kind) {
+    for (var i = 0; i < txMeterCaps.length; i++)
+        if (txMeterCaps[i].kind === kind) return txMeterCaps[i];
+    return null;
+}
+
+// Called when the rig identifies itself. A radio that can't produce the
+// remembered reading falls back to SWR rather than showing a dead bar.
+function setTxMeterCaps(list) {
+    txMeterCaps = Array.isArray(list) ? list : [];
+    if (!txMeterDesc(txMeterKind)) txMeterKind = 'swr';
+    var canvas = document.getElementById('meterCanvas');
+    if (canvas) canvas.style.cursor = txMeterCaps.length > 1 ? 'pointer' : '';
+    sendTxMeterSelection();
+    drawMeter();
+}
+
+// Comp/Vd/Id each cost the radio an extra poll, so the backend only reads
+// the one that is showing.
+function sendTxMeterSelection() { send({ cmd: 'setTxMeter', value: txMeterKind }); }
+
+function cycleTxMeter() {
+    if (txMeterCaps.length < 2) return;
+    var i = 0;
+    for (var n = 0; n < txMeterCaps.length; n++)
+        if (txMeterCaps[n].kind === txMeterKind) { i = n; break; }
+    txMeterKind = txMeterCaps[(i + 1) % txMeterCaps.length].kind;
+    try { localStorage.setItem('wfTxMeter', txMeterKind); } catch (e) {}
+    txAuxPeakCount = 0;
+    sendTxMeterSelection();
+    drawMeter();
+}
+
+// Face for the bottom row. SWR keeps the face the radio prints (1 / 1.5 / 2 /
+// 2.5 / 3, then a red zone running to infinity). Every other reading is drawn
+// straight from the rig's calibration table: the radio's bar is linear in the
+// raw register value, so each table point belongs at rigVal/maxRigVal and is
+// labelled with the reading it stands for — which is the face on the radio.
+function txMeterFace(kind, barW) {
+    if (kind !== 'swr') {
+        var d = txMeterDesc(kind);
+        if (d && d.cal && d.cal.length >= 2) return calMeterFace(kind, d);
+    }
+    return {
+        label: 'SWR',
+        marks: (barW >= 220)
+            ? [['1', 0], ['1.5', 0.165], ['2', 0.33], ['2.5', 0.5], ['3', 0.66]]
+            : [['1', 0], ['2', 0.33], ['3', 0.66]],
+        tail: '∞',
+        redFrac: 0.66,
+        // Tracks the printed scale: linear 1..3 over the left 2/3, then
+        // 3..6 compressed into the red zone toward infinity.
+        frac: function (v) { return (v <= 3) ? (v - 1) * 0.33 : 0.66 + (v - 3) * (0.34 / 3); },
+        text: function (v) { return v.toFixed(1); }
+    };
+}
+
+function calMeterFace(kind, d) {
+    var cal = d.cal;
+    var maxRaw = cal[cal.length - 1][0] || 255;
+    // The radio prints no numbers on its ALC scale either — it is a plain bar
+    // with a red zone — so only the ticks are drawn for it. Its red zone is
+    // also the one landmark every Icom marks the same way: the point the
+    // tables call 1.0, where ALC action starts. A couple of .rig files flag
+    // the top of the scale instead, which would leave the row with no zone
+    // at all, so prefer the 1.0 point when the table has one.
+    var numbered = (kind !== 'alc');
+    var red = d.red;
+    if (kind === 'alc') {
+        for (var r = 0; r < cal.length; r++) if (cal[r][1] === 1) red = 1;
+    }
+    var marks = [], redFrac = null;
+    for (var i = 0; i < cal.length; i++) {
+        var frac = cal[i][0] / maxRaw;
+        marks.push([numbered ? fmtMeterNum(cal[i][1]) : '', frac]);
+        if (red !== undefined && cal[i][1] === red) redFrac = frac;
+    }
+    var unit = TX_METER_UNITS[kind] || '';
+    return {
+        label: TX_METER_LABELS[kind] || kind,
+        marks: marks,
+        tail: null,
+        redFrac: redFrac,
+        frac: function (v) { return calToFrac(cal, v); },
+        text: function (v) { return fmtMeterNum(v) + unit; }
+    };
+}
+
+function fmtMeterNum(v) { return String(Math.round(v * 10) / 10); }
+
+// Invert a calibration table: reading -> bar fraction. Readings rise with the
+// raw register value in every table, so a piecewise walk is enough.
+function calToFrac(cal, v) {
+    var maxRaw = cal[cal.length - 1][0] || 255;
+    if (v <= cal[0][1]) return 0;
+    for (var i = 1; i < cal.length; i++) {
+        if (v <= cal[i][1]) {
+            var r0 = cal[i - 1][0], a0 = cal[i - 1][1];
+            var r1 = cal[i][0],     a1 = cal[i][1];
+            return ((a1 === a0) ? r1 : r0 + (r1 - r0) * (v - a0) / (a1 - a0)) / maxRaw;
+        }
+    }
+    return 1;
+}
+
+// Row label in the narrow left column. 'COMP' is wider than 'SWR' or 'Po',
+// so step the font down instead of letting it run under the bar.
+function drawMeterRowLabel(ctx, text, x, y, fs, maxW) {
+    ctx.textAlign = 'left';
+    ctx.font = fs + 'px system-ui, sans-serif';
+    while (fs > 6 && ctx.measureText(text).width > maxW) {
+        fs--;
+        ctx.font = fs + 'px system-ui, sans-serif';
+    }
+    ctx.fillText(text, x, y);
+}
+
+document.addEventListener('DOMContentLoaded', function () {
+    var canvas = document.getElementById('meterCanvas');
+    if (canvas) canvas.addEventListener('click', cycleTxMeter);
+});
+
+// The bottom row's static scale — ticks, numbers, red zone. Shared by the RX
+// face (where the row is ornamental) and the TX face (where it has a live bar
+// sitting on it).
+function drawTxMeterScale(ctx, barX, barW, tickY, numY, fs, tickH, face) {
+    ctx.font = fs + 'px system-ui, sans-serif';
+    ctx.textBaseline = 'top';
+    // Calibration points can sit very close together (the IC-705 reads 10 V
+    // at raw 13), so a number is dropped when it would run into the one
+    // before it. The tick stays either way.
+    var usedTo = -1e9;
+    for (var m = 0; m < face.marks.length; m++) {
+        var mx = barX + face.marks[m][1] * barW;
+        var red = (face.redFrac !== null && face.marks[m][1] > face.redFrac);
+        ctx.fillStyle = red ? METER_SCALE_RED : '#aaa';
+        ctx.fillRect(Math.round(mx) - 0.5, tickY, 1, tickH - 1);
+        if (!face.marks[m][0]) continue;
+        var last = (m === face.marks.length - 1) && !face.tail;
+        var w = ctx.measureText(face.marks[m][0]).width;
+        var left = (m === 0) ? mx - 1 : last ? mx - w : mx - w / 2;
+        if (left < usedTo) continue;
+        usedTo = left + w + 4;
+        ctx.fillStyle = red ? METER_SCALE_RED : '#ccc';
+        ctx.textAlign = (m === 0) ? 'left' : last ? 'right' : 'center';
+        ctx.fillText(face.marks[m][0], (m === 0) ? mx - 1 : mx, numY);
+    }
+    // Red-zone ticks, starting where the radio's own face turns red.
+    if (face.redFrac !== null) {
+        ctx.fillStyle = METER_SCALE_RED;
+        for (var rz = face.redFrac + 0.07; rz <= 0.93; rz += 0.063)
+            ctx.fillRect(Math.round(barX + rz * barW) - 0.5, tickY, 1, tickH - 1);
+    }
+    if (face.tail) {
+        ctx.textAlign = 'right';
+        ctx.fillStyle = '#ccc';
+        ctx.fillText(face.tail, barX + barW, numY);
+    }
+}
 function updateALCMeter(val) {
     alcVal = val;
     if (isTransmitting) drawMeter();
@@ -4407,14 +4608,15 @@ function drawSMeter(ctx, cw, ch, barX, barW) {
     var segY  = y0 + numH + tickH + 1;        // top of segment bar
     var lineY = segY + segH + 1;              // white baseline under the bar
 
-    // --- "S" / "SWR" row labels (left column) ---
+    // --- "S" / selected-meter row labels (left column) ---
+    var face = txMeterFace(txMeterKind, barW);
     ctx.font = fs + 'px system-ui, sans-serif';
     ctx.textAlign = 'left';
     ctx.textBaseline = 'top';
     ctx.fillStyle = '#ddd';
     ctx.fillText('S', 2, y0 + 1);
     ctx.fillStyle = '#bbb';
-    ctx.fillText('SWR', 2, lineY + 2);
+    drawMeterRowLabel(ctx, face.label, 2, lineY + 2, fs, barX - 4);
 
     // --- S scale: 1 3 5 7 9 in white, +20/+40/+60dB in red ---
     ctx.font = 'bold ' + fs + 'px system-ui, sans-serif';
@@ -4472,34 +4674,14 @@ function drawSMeter(ctx, cw, ch, barX, barW) {
     ctx.fillStyle = METER_BASELINE;
     ctx.fillRect(barX, lineY, barW, 1);
 
-    // --- SWR scale below the bar (static face, like the rig) ---
-    var swrTickY = lineY + 2;
-    var swrNumY  = swrTickY + tickH;
-    var swrMarks = (barW >= 220)
-        ? [['1', 0], ['1.5', 0.165], ['2', 0.33], ['2.5', 0.5], ['3', 0.66]]
-        : [['1', 0], ['2', 0.33], ['3', 0.66]];
-    ctx.font = fs + 'px system-ui, sans-serif';
-    for (var m = 0; m < swrMarks.length; m++) {
-        var mx = barX + swrMarks[m][1] * barW;
-        ctx.fillStyle = '#aaa';
-        ctx.fillRect(Math.round(mx) - 0.5, swrTickY, 1, tickH - 1);
-        ctx.fillStyle = '#ccc';
-        ctx.textAlign = (m === 0) ? 'left' : 'center';
-        ctx.fillText(swrMarks[m][0], (m === 0) ? mx - 1 : mx, swrNumY);
-    }
-    // red over-3 zone ticks + infinity at the right end
-    ctx.fillStyle = METER_SCALE_RED;
-    for (var rz = 0.73; rz <= 0.92; rz += 0.063)
-        ctx.fillRect(Math.round(barX + rz * barW) - 0.5, swrTickY, 1, tickH - 1);
-    ctx.textAlign = 'right';
-    ctx.fillStyle = '#ccc';
-    ctx.fillText('∞', barX + barW, swrNumY);
+    // --- Selected meter's scale below the bar (static face, like the rig) ---
+    drawTxMeterScale(ctx, barX, barW, lineY + 2, lineY + 2 + tickH, fs, tickH, face);
 }
 
 function drawTxMeters(ctx, cw, ch, barX, barW) {
     // TX face, same visual language as the RX face in drawSMeter: Po scale
-    // and tile bar on top, live SWR tile bar sitting on the static SWR
-    // scale below (the row that is ornamental during RX).
+    // and tile bar on top, and the selected meter's live tile bar sitting on
+    // the static scale below (the row that is ornamental during RX).
     var k      = barW >= 300 ? 6 : barW >= 190 ? 4 : 2;
     var tiles  = 18 * k + 1;
     var pitch  = barW / tiles;
@@ -4520,19 +4702,21 @@ function drawTxMeters(ctx, cw, ch, barX, barW) {
 
     var poSegY   = y0 + numH + tickH + 1;      // top of the Po bar
     var poLineY  = poSegY + segH + 1;          // white baseline under it
-    var swrSegY  = poLineY + 1 + midGap;       // top of the SWR bar
-    var swrLineY = swrSegY + segH + 1;         // white baseline under it
-    var swrTickY = swrLineY + 2;
-    var swrNumY  = swrTickY + tickH;
+    var auxSegY  = poLineY + 1 + midGap;       // top of the selected meter's bar
+    var auxLineY = auxSegY + segH + 1;         // white baseline under it
+    var auxTickY = auxLineY + 2;
+    var auxNumY  = auxTickY + tickH;
 
-    // --- "Po" / "SWR" row labels (left column) ---
+    // --- "Po" / selected-meter row labels (left column) ---
+    var face = txMeterFace(txMeterKind, barW);
+    var auxVal = txMeterValue(txMeterKind);
     ctx.font = fs + 'px system-ui, sans-serif';
     ctx.textAlign = 'left';
     ctx.textBaseline = 'top';
     ctx.fillStyle = '#ddd';
     ctx.fillText('Po', 2, y0 + 1);
     ctx.fillStyle = '#bbb';
-    ctx.fillText('SWR', 2, swrTickY);
+    drawMeterRowLabel(ctx, face.label, 2, auxTickY, fs, barX - 4);
 
     // --- Numeric readouts (left column, beside each bar) ---
     var vfs = Math.min(fs, segH);
@@ -4540,7 +4724,7 @@ function drawTxMeters(ctx, cw, ch, barX, barW) {
     ctx.textBaseline = 'middle';
     ctx.fillStyle = '#fff';
     ctx.fillText(Math.round(powerVal) + 'W', 2, poSegY + segH / 2 + 1);
-    ctx.fillText(swrVal.toFixed(1), 2, swrSegY + segH / 2 + 1);
+    ctx.fillText(face.text(auxVal), 2, auxSegY + segH / 2 + 1);
 
     // --- Po scale: 0 25 50 above the bar, 100% at the right end ---
     var poMarks = (barW >= 160)
@@ -4581,52 +4765,30 @@ function drawTxMeters(ctx, cw, ch, barX, barW) {
     ctx.fillStyle = METER_BASELINE;
     ctx.fillRect(barX, poLineY, barW, 1);
 
-    // --- SWR tile bar (blue to the 3 mark, red in the over-3 zone) ---
-    // Fill tracks the printed scale: linear 1..3 over the left 2/3,
-    // 3..6 compressed into the red zone toward ∞.
-    var swrFrac = (swrVal <= 3) ? (swrVal - 1) * 0.33
-                                : 0.66 + (swrVal - 3) * (0.34 / 3);
-    var swrFill = Math.round(Math.min(1, Math.max(0, swrFrac)) * tiles);
-    var warnTile = Math.round(0.66 * tiles);
-    if (swrFill >= txSwrPeakCount || now - txSwrPeakTs > METER_PEAK_HOLD_MS) {
-        txSwrPeakCount = swrFill;
-        txSwrPeakTs = now;
+    // --- Selected meter's tile bar (blue, red past the radio's red line) ---
+    var auxFill = Math.round(Math.min(1, Math.max(0, face.frac(auxVal))) * tiles);
+    var warnTile = (face.redFrac === null) ? tiles : Math.round(face.redFrac * tiles);
+    if (auxFill >= txAuxPeakCount || now - txAuxPeakTs > METER_PEAK_HOLD_MS) {
+        txAuxPeakCount = auxFill;
+        txAuxPeakTs = now;
     }
     for (var j = 0; j < tiles; j++) {
-        var jon = (j < swrFill) || (j === txSwrPeakCount - 1);
+        var jon = (j < auxFill) || (j === txAuxPeakCount - 1);
         ctx.fillStyle = jon ? (j <= warnTile ? METER_BLUE : METER_RED) : METER_DARK;
-        ctx.fillRect(barX + j * pitch + gap / 2, swrSegY, tileW, segH);
+        ctx.fillRect(barX + j * pitch + gap / 2, auxSegY, tileW, segH);
     }
     ctx.fillStyle = METER_BASELINE;
-    ctx.fillRect(barX, swrLineY, barW, 1);
+    ctx.fillRect(barX, auxLineY, barW, 1);
 
-    // --- SWR scale below the bar (same face as RX) ---
-    var swrMarks = (barW >= 220)
-        ? [['1', 0], ['1.5', 0.165], ['2', 0.33], ['2.5', 0.5], ['3', 0.66]]
-        : [['1', 0], ['2', 0.33], ['3', 0.66]];
-    ctx.font = fs + 'px system-ui, sans-serif';
-    for (var m = 0; m < swrMarks.length; m++) {
-        var mx = barX + swrMarks[m][1] * barW;
-        ctx.fillStyle = '#aaa';
-        ctx.fillRect(Math.round(mx) - 0.5, swrTickY, 1, tickH - 1);
-        ctx.fillStyle = '#ccc';
-        ctx.textAlign = (m === 0) ? 'left' : 'center';
-        ctx.fillText(swrMarks[m][0], (m === 0) ? mx - 1 : mx, swrNumY);
-    }
-    // red over-3 zone ticks + infinity at the right end
-    ctx.fillStyle = METER_SCALE_RED;
-    for (var rz = 0.73; rz <= 0.92; rz += 0.063)
-        ctx.fillRect(Math.round(barX + rz * barW) - 0.5, swrTickY, 1, tickH - 1);
-    ctx.textAlign = 'right';
-    ctx.fillStyle = '#ccc';
-    ctx.fillText('∞', barX + barW, swrNumY);
+    // --- Selected meter's scale below the bar (same face as RX) ---
+    drawTxMeterScale(ctx, barX, barW, auxTickY, auxNumY, fs, tickH, face);
 
     // ALC readout — visible during DIGI TX or FreeDV TX (drives auto-gain)
     if (digiTxActive || digiTuneActive || (freedvEnabled && micEnabled && isTransmitting)) {
         ctx.fillStyle = alcVal > 0.05 ? '#ff4444' : '#44cc44';
         ctx.font = 'bold 9px system-ui, sans-serif';
         ctx.textAlign = 'right';
-        ctx.fillText('ALC ' + Math.round(alcVal * 100) + '%', barX + barW - 12, swrNumY);
+        ctx.fillText('ALC ' + Math.round(alcVal * 100) + '%', barX + barW - 12, auxNumY);
     }
 }
 
