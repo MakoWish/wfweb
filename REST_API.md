@@ -61,6 +61,31 @@ All responses are JSON objects.
 
 ## Endpoints
 
+### QSO logged events
+
+Whenever the server-hosted web UI commits a completed QSO, it sends a
+`qsoLogged` WebSocket command containing the browser's existing QSO fields.
+The server:
+
+* appends the normalized QSO as one compact JSON object per line to
+  `qso-log.jsonl` in Qt's application data directory;
+* writes the same object to the service log prefixed with
+  `WFWEB_QSO_LOGGED` (and therefore to the systemd journal); and
+* broadcasts `{ "type": "qsoLogged", "qso": { ... } }` to connected
+  WebSocket clients for real-time integrations.
+
+For a typical Linux service the file is under the account running wfweb at
+`~/.local/share/wfview/wfweb/qso-log.jsonl`. Use
+`journalctl -u <wfweb-service> -g WFWEB_QSO_LOGGED -f` for a generic event
+hook without depending on that platform-specific path. Draft rows, cancelled
+entries, edits, and deletions do not emit a new-QSO event.
+
+Example event payload:
+
+```json
+{"type":"qsoLogged","qso":{"date":"20260915","time":"165430","call":"WW9WW","freq":14074000,"band":"20M","mode":"FT8","grid":"EM73","rstSent":"-08","rstRcvd":"-11"}}
+```
+
 ### GET /api/v1/radio
 
 Full combined info + status.

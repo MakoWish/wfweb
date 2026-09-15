@@ -204,6 +204,7 @@ private:
     // both, which is the structural unification of TX audio plumbing.
     void txWritePcmFrame(const QByteArray &pcmMonoLE, bool applyGain);
     void handleCommand(QWebSocket *client, const QJsonObject &cmd);
+    void handleQsoLogged(QWebSocket *client, const QJsonObject &qso);
     void requestVfoUpdate();
     void disableFreeDV();
     bool isFreeDVCompatibleMode(rigMode_t mk) const;

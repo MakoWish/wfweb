@@ -1758,7 +1758,10 @@ void webServer::handleCommand(QWebSocket *client, const QJsonObject &cmd)
 {
     QString type = cmd["cmd"].toString();
 
-    if (type == "setFrequency") {
+    if (type == "qsoLogged") {
+        handleQsoLogged(client, cmd["qso"].toObject());
+    }
+    else if (type == "setFrequency") {
         quint64 hz = cmd["value"].toVariant().toULongLong();
         if (hz > 0) {
             freqt f;
@@ -3107,6 +3110,61 @@ void webServer::handleCommand(QWebSocket *client, const QJsonObject &cmd)
         err["message"] = QString("Unknown command: %1").arg(type);
         sendJsonTo(client, err);
     }
+}
+
+void webServer::handleQsoLogged(QWebSocket *client, const QJsonObject &input)
+{
+    Q_UNUSED(client)
+
+    // Keep the event schema deliberately small and stable.  Besides limiting
+    // untrusted WebSocket input, copying known fields makes JSONL consumers
+    // independent of browser-only implementation details.
+    const QString call = input.value("call").toString().trimmed().toUpper();
+    if (call.isEmpty() || call.size() > 32) {
+        qWarning() << "Web: Ignoring invalid qsoLogged event";
+        return;
+    }
+
+    QJsonObject qso;
+    const auto copyString = [&input, &qso](const char *name, int maxLength) {
+        const QString value = input.value(QLatin1String(name)).toString().left(maxLength);
+        if (!value.isEmpty()) qso[QLatin1String(name)] = value;
+    };
+    copyString("date", 8);
+    copyString("time", 6);
+    qso["call"] = call;
+    if (input.value("freq").isDouble()) {
+        const qint64 freq = input.value("freq").toVariant().toLongLong();
+        if (freq >= 0) qso["freq"] = freq;
+    }
+    copyString("band", 16);
+    copyString("mode", 16);
+    if (input.value("df").isDouble()) qso["df"] = input.value("df").toInt();
+    copyString("grid", 16);
+    copyString("theirGrid", 16);
+    copyString("rstSent", 16);
+    copyString("rstRcvd", 16);
+
+    const QByteArray json = QJsonDocument(qso).toJson(QJsonDocument::Compact);
+    const QString dataDir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+    QDir().mkpath(dataDir);
+    const QString path = QDir(dataDir).filePath(QStringLiteral("qso-log.jsonl"));
+    QFile log(path);
+    if (log.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text)) {
+        log.write(json);
+        log.write("\n");
+        log.close();
+    } else {
+        qWarning().noquote() << "Web: Could not append QSO log" << path << log.errorString();
+    }
+
+    // The fixed prefix is suitable for journalctl-based hooks, while the
+    // broadcast lets another WebSocket client consume events in real time.
+    qInfo().noquote() << "WFWEB_QSO_LOGGED" << QString::fromUtf8(json);
+    QJsonObject event;
+    event["type"] = "qsoLogged";
+    event["qso"] = qso;
+    sendJsonToAll(event);
 }
 
 QJsonObject webServer::buildInfoJson() const

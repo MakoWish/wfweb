@@ -10139,6 +10139,19 @@ function freqToBand(hz) {
     return '';
 }
 
+// Commit a complete QSO in one place.  Draft rows (SSB/manual entries) are
+// inserted separately and call this with alreadyAdded=true once the callsign
+// has been supplied.  That prevents incomplete contacts and ordinary edits
+// from being reported as new QSOs.
+function commitQsoLogEntry(entry, alreadyAdded) {
+    if (!entry || !entry.call) return null;
+    if (!alreadyAdded) qsoLog.unshift(entry);
+    try { localStorage.setItem('qsoLog', JSON.stringify(qsoLog.slice(0, 500))); } catch(e) {}
+    renderDigiLog();
+    send({ cmd: 'qsoLogged', qso: entry });
+    return entry;
+}
+
 function logDigiQso(dxCall, rstSent) {
     var now = new Date();
     var iso = now.toISOString();
@@ -10157,9 +10170,7 @@ function logDigiQso(dxCall, rstSent) {
                  ((rstSent >= 0 ? '+' : '') + Math.round(rstSent)) : '',
         rstRcvd: digiTheirReport || ''
     };
-    qsoLog.unshift(entry);
-    try { localStorage.setItem('qsoLog', JSON.stringify(qsoLog.slice(0, 500))); } catch(e) {}
-    renderDigiLog();
+    commitQsoLogEntry(entry);
     // Show "LOGGED" confirmation in the directed panel
     var dirPanel = document.getElementById('digiDirectedPanel');
     if (dirPanel) {
@@ -10196,10 +10207,7 @@ function addQsoLogEntry(fields) {
         rstSent: fields.rstSent || '',
         rstRcvd: fields.rstRcvd || ''
     };
-    qsoLog.unshift(entry);
-    try { localStorage.setItem('qsoLog', JSON.stringify(qsoLog.slice(0, 500))); } catch(e) {}
-    renderDigiLog();
-    return entry;
+    return commitQsoLogEntry(entry);
 }
 window.addQsoLogEntry = addQsoLogEntry;
 
@@ -10227,9 +10235,7 @@ function logCWQso() {
         rstSent: '599',
         rstRcvd: '599'
     };
-    qsoLog.unshift(entry);
-    try { localStorage.setItem('qsoLog', JSON.stringify(qsoLog.slice(0, 500))); } catch(e) {}
-    renderDigiLog();
+    commitQsoLogEntry(entry);
     openLogModal();
 }
 
@@ -10336,6 +10342,7 @@ function cancelEditDigiQso() {
 function saveDigiQso(idx) {
     var q = qsoLog[idx];
     if (!q) return;
+    var isNewQso = !q.call;
     var dateVal   = (document.getElementById('dleDate')    || {}).value || '';
     var timeVal   = (document.getElementById('dleTime')    || {}).value || '';
     var callVal   = (document.getElementById('dleCall')    || {}).value || '';
@@ -10355,9 +10362,16 @@ function saveDigiQso(idx) {
     q.mode    = modeVal.toUpperCase();
     q.rstSent = rstSent;
     q.rstRcvd = rstRcvd;
+    if (!q.call) {
+        renderDigiLog();
+        return;
+    }
     digiLogEditIdx = -1;
-    try { localStorage.setItem('qsoLog', JSON.stringify(qsoLog.slice(0, 500))); } catch(e) {}
-    renderDigiLog();
+    if (isNewQso) commitQsoLogEntry(q, true);
+    else {
+        try { localStorage.setItem('qsoLog', JSON.stringify(qsoLog.slice(0, 500))); } catch(e) {}
+        renderDigiLog();
+    }
 }
 
 function addDigiQso() {
