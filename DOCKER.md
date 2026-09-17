@@ -185,12 +185,12 @@ The REST port is always web port + 1.
 
 ## Persistent Configuration
 
-The container stores settings in `/root/.config/wfview/wfweb.conf`. To persist
+The container stores settings in `/root/.config/wfweb/wfweb.conf`. To persist
 configuration across container restarts, mount a volume:
 
 ```bash
 docker run --rm -it \
-  -v wfview-config:/root/.config/wfview \
+  -v wfview-config:/root/.config/wfweb \
   --device /dev/ttyUSB0 \
   --device /dev/snd --group-add audio \
   -p 8080:8080 -p 8081:8081 \
@@ -230,7 +230,7 @@ and `--manufacturer <id>` directly.
 > automatically from its install's `rigs/` directory based on the radio
 > it detects on the bus.
 
-The TLS certificate is stored in `/root/.local/share/wfview/wfweb/`. Mount that
+The TLS certificate is stored in `/root/.local/share/wfweb/wfweb/`. Mount that
 path too if you want to persist or supply your own certificate.
 
 ---
@@ -306,7 +306,7 @@ services:
     group_add:
       - audio
     volumes:
-      - wfview-config:/root/.config/wfview
+      - wfview-config:/root/.config/wfweb
     command: ["--serial-port", "/dev/ttyUSB0"]
 
 volumes:
@@ -324,7 +324,7 @@ services:
       - "8080:8080"
       - "8081:8081"
     volumes:
-      - wfview-config:/root/.config/wfview
+      - wfview-config:/root/.config/wfweb
     command:
       - "--lan"
       - "192.168.1.100"
