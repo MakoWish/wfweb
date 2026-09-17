@@ -3,6 +3,7 @@
 #include <codec2/freedv_api.h>
 #include "logcategories.h"
 #include "wfweb_version.h"
+#include "wsjtxmessage.h"
 
 #include <QStandardPaths>
 #include <QDir>
@@ -42,6 +43,12 @@
 // power on a full-duty signal. Kept separate from freedvTxGain so the
 // classic-FreeDV ALC loop can't affect RADE.
 static constexpr float RADE_TX_GAIN = 0.4f;
+
+static QByteArray adifHeader()
+{
+    return QByteArray("ADIF Export from wfweb\n"
+                      "<ADIF_VER:5>3.1.4 <PROGRAMID:5>wfweb <EOH>\n");
+}
 
 // Repeater duplex direction on the wire. The browser and the REST clients
 // speak these three names; the parser only ever caches simplex / DUP- / DUP+,
@@ -3186,8 +3193,14 @@ void webServer::handleCommand(QWebSocket *client, const QJsonObject &cmd)
             pskReporter->updateRxSpotWithGrid(call, grid, mode, snr);
         }
         if (wsjtxEnabled_ && wsjtxDecodes_) {
-            const QTime time=QTime::fromString(cmd["time"].toString(),"hh:mm:ss");
-            wsjtxSendDatagram(2,[&](QDataStream&o){ o<<true<<time<<qint32(cmd["snr"].toInt())<<cmd["dt"].toDouble()<<quint32(cmd["df"].toInt())<<cmd["mode"].toString()<<cmd["message"].toString()<<false<<false; });
+            WsjtxMessage::DecodeFields decode;
+            decode.time = QTime::fromString(cmd["time"].toString(), "hh:mm:ss");
+            decode.snr = cmd["snr"].toInt();
+            decode.deltaTime = cmd["dt"].toDouble();
+            decode.deltaFrequency = cmd["df"].toInt();
+            decode.mode = cmd["mode"].toString();
+            decode.message = cmd["message"].toString();
+            wsjtxSendDatagram(WsjtxMessage::decode(wsjtxId_, decode));
         }
     }
     else {
@@ -5839,6 +5852,13 @@ QByteArray webServer::qsoToAdif(const QJsonObject &qso) const
     return out;
 }
 
+QByteArray webServer::adifDocumentForQso(const QJsonObject &qso) const
+{
+    QByteArray document = adifHeader();
+    document += qsoToAdif(qso);
+    return document;
+}
+
 void webServer::loadLogbook()
 {
     qsoLog_.clear();
@@ -5866,7 +5886,7 @@ bool webServer::writeLogbook() const
 {
     QSaveFile file(logbookPath_);
     if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) return false;
-    file.write("ADIF Export from wfweb\n<ADIF_VER:5>3.1.4 <PROGRAMID:5>wfweb <EOH>\n");
+    file.write(adifHeader());
     for (auto it = qsoLog_.crbegin(); it != qsoLog_.crend(); ++it) file.write(qsoToAdif(*it));
     return file.commit();
 }
@@ -5891,31 +5911,61 @@ bool webServer::configureWsjtxTarget(const QString &target)
     wsjtxHeartbeatTimer_->start(15000); wsjtxSendHeartbeat(); return true;
 }
 
-void webServer::wsjtxSendDatagram(quint32 type, const std::function<void(QDataStream &)> &fields)
+void webServer::wsjtxSendDatagram(const QByteArray &packet)
 {
     if (!wsjtxEnabled_ || !wsjtxSocket_) return;
-    QByteArray packet; QDataStream out(&packet, QIODevice::WriteOnly); out.setVersion(QDataStream::Qt_5_0); out.setByteOrder(QDataStream::BigEndian);
-    out << quint32(0xadbccbda) << quint32(3) << type << wsjtxId_; fields(out);
     wsjtxSocket_->writeDatagram(packet, wsjtxAddress_, wsjtxPort_);
 }
-void webServer::wsjtxSendHeartbeat() { wsjtxSendDatagram(0, [](QDataStream &o){ o << quint32(3) << QString(WFWEB_VERSION) << QString(); }); wsjtxSendStatus(); }
+void webServer::wsjtxSendHeartbeat()
+{
+    wsjtxSendDatagram(WsjtxMessage::heartbeat(
+        wsjtxId_, WsjtxMessage::Schema, QString(WFWEB_VERSION), QString()));
+    wsjtxSendStatus();
+}
 void webServer::wsjtxSendStatus()
 {
-    quint64 frequency=0; QString mode;
+    WsjtxMessage::StatusFields status;
     if (queue && rigCaps) {
-        const vfoCommandType v=queue->getVfoCommand(vfoA,0,false);
-        const cacheItem fc=queue->getCache(v.freqFunc,v.receiver); if(fc.value.isValid()) frequency=fc.value.value<freqt>().Hz;
-        const cacheItem mc=queue->getCache(v.modeFunc,v.receiver); if(mc.value.isValid()) mode=modeToString(mc.value.value<modeInfo>());
+        const vfoCommandType v = queue->getVfoCommand(vfoA, 0, false);
+        const cacheItem fc = queue->getCache(v.freqFunc, v.receiver);
+        if (fc.value.isValid()) status.dialFrequency = fc.value.value<freqt>().Hz;
+        const cacheItem mc = queue->getCache(v.modeFunc, v.receiver);
+        if (mc.value.isValid()) status.mode = modeToString(mc.value.value<modeInfo>());
     }
-    wsjtxSendDatagram(1,[&](QDataStream&o){ o<<frequency<<mode<<QString()<<QString()<<mode<<false<<false<<false<<quint32(0)<<quint32(0)<<QString()<<QString()<<false<<QString()<<false<<quint8(0)<<quint32(0)<<quint32(0)<<QString()<<QString(); });
+    if (digiActive && (digiMode == QLatin1String("FT8") || digiMode == QLatin1String("FT4")))
+        status.mode = digiMode;
+    status.txMode = status.mode;
+    status.deCall = reporterCallsign;
+    status.deGrid = reporterGrid;
+    wsjtxSendDatagram(WsjtxMessage::status(wsjtxId_, status));
 }
-void webServer::wsjtxSendClose() { if (wsjtxEnabled_) wsjtxSendDatagram(6, [](QDataStream &){}); }
+void webServer::wsjtxSendClose()
+{
+    if (wsjtxEnabled_) wsjtxSendDatagram(WsjtxMessage::close(wsjtxId_));
+}
 void webServer::wsjtxSendQso(const QJsonObject &q)
 {
     wsjtxSendStatus();
-    const QDate d=QDate::fromString(q.value("date").toString(),"yyyyMMdd"); const QTime t=QTime::fromString(q.value("time").toString(),"hhmmss"); const QDateTime dt(d,t,Qt::UTC);
-    wsjtxSendDatagram(5,[&](QDataStream&o){ o<<dt<<q.value("call").toString()<<q.value("theirGrid").toString()<<quint64(q.value("freq").toVariant().toULongLong())<<q.value("mode").toString()<<q.value("rstSent").toString()<<q.value("rstRcvd").toString()<<QString()<<q.value("comment").toString()<<q.value("name").toString()<<dt<<QString()<<QString()<<q.value("grid").toString()<<QString()<<QString()<<QString(); });
-    const QByteArray adif=qsoToAdif(q).trimmed(); wsjtxSendDatagram(12,[&](QDataStream&o){ o<<adif; });
+    const QDate date = QDate::fromString(q.value("date").toString(), "yyyyMMdd");
+    const QTime time = QTime::fromString(q.value("time").toString(), "hhmmss");
+    const QDateTime timestamp(date, time, Qt::UTC);
+    WsjtxMessage::QsoFields fields;
+    fields.dateOff = timestamp;
+    fields.dxCall = q.value("call").toString();
+    fields.dxGrid = q.value("theirGrid").toString();
+    fields.txFrequency = q.value("freq").toVariant().toULongLong();
+    fields.mode = q.value("mode").toString();
+    fields.reportSent = q.value("rstSent").toString();
+    fields.reportReceived = q.value("rstRcvd").toString();
+    fields.comments = q.value("comment").toString();
+    fields.name = q.value("name").toString();
+    fields.dateOn = timestamp;
+    fields.myCall = reporterCallsign;
+    fields.myGrid = q.value("grid").toString().isEmpty()
+        ? reporterGrid : q.value("grid").toString();
+    wsjtxSendDatagram(WsjtxMessage::qsoLogged(wsjtxId_, fields));
+    wsjtxSendDatagram(WsjtxMessage::loggedAdif(
+        wsjtxId_, adifDocumentForQso(q).trimmed()));
 }
 
 void webServer::setInstanceName(const QString &name)

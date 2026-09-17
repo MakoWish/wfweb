@@ -18,8 +18,6 @@
 #include <QSslKey>
 #include <QSslCertificate>
 #include <QUdpSocket>
-#include <QDataStream>
-#include <functional>
 
 #if (QT_VERSION < QT_VERSION_CHECK(6,0,0))
 #include <QAudioDeviceInfo>
@@ -215,12 +213,13 @@ private:
     bool writeLogbook() const;
     QJsonObject normalizeQso(const QJsonObject &input, const QString &id = QString()) const;
     QByteArray qsoToAdif(const QJsonObject &qso) const;
+    QByteArray adifDocumentForQso(const QJsonObject &qso) const;
     void broadcastLogbook();
     void wsjtxSendHeartbeat();
     void wsjtxSendStatus();
     void wsjtxSendQso(const QJsonObject &qso);
     void wsjtxSendClose();
-    void wsjtxSendDatagram(quint32 type, const std::function<void(QDataStream &)> &fields);
+    void wsjtxSendDatagram(const QByteArray &packet);
     bool configureWsjtxTarget(const QString &target);
     void requestVfoUpdate();
     void disableFreeDV();
