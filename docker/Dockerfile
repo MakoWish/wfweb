@@ -62,7 +62,11 @@ COPY --from=builder /install/usr/lib/librade* /usr/lib/
 COPY --from=builder /src/LICENSE /src/THIRD_PARTY_LICENSES /usr/share/doc/wfweb/
 RUN ldconfig
 
-ENV QT_QPA_PLATFORM=offscreen
+ENV QT_QPA_PLATFORM=offscreen \
+    XDG_CONFIG_HOME=/data \
+    XDG_DATA_HOME=/data
+
+VOLUME ["/data"]
 
 # Remove the PulseAudio Qt plugin so Qt Multimedia uses ALSA directly.
 # No PulseAudio daemon runs inside the container; leaving the plugin causes

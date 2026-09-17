@@ -230,8 +230,9 @@ and `--manufacturer <id>` directly.
 > automatically from its install's `rigs/` directory based on the radio
 > it detects on the bus.
 
-The TLS certificate is stored in `/root/.local/share/wfview/wfweb/`. Mount that
-path too if you want to persist or supply your own certificate.
+The image sets both Qt configuration and application data roots to `/data`.
+Mount that single volume to persist settings, TLS certificate, and the ADIF
+logbook together, for example `-v wfweb-data:/data`. The TLS certificate is stored there as well.
 
 ---
 
@@ -261,6 +262,10 @@ Server:
   --rigctld-port <port>   Enable Hamlib rigctld TCP server (default off)
   --rigctld-bind-all      Bind rigctld to all interfaces (default localhost)
   --no-rigctld            Disable rigctld even if enabled in settings
+  --logbook <file>        ADIF logbook path (default under /data)
+  --wsjtx <host[:port]>   Emit WSJT-X UDP messages (default port 2237)
+  --no-wsjtx              Disable configured WSJT-X UDP output
+  --wsjtx-decodes         Also emit FT8/FT4 Decode messages
 
 Audio:
   --audio-system <id>     Audio backend (0=Qt, 1=PortAudio, 2=RtAudio)

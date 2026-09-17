@@ -14,6 +14,10 @@
 #include <QTimer>
 #include <QThread>
 #include <QDateTime>
+#include <QRegularExpression>
+#include <QSaveFile>
+#include <QUuid>
+#include <QHostInfo>
 
 #ifdef Q_OS_WIN
 #include <windows.h>
@@ -126,6 +130,7 @@ webServer::webServer(QObject *parent) :
 
 webServer::~webServer()
 {
+    wsjtxSendClose();
     // Restore DATA MOD OFF setting if mic was active.  ~servermain() waits
     // for the queue to dispatch this before it closes the rig port.
     if (dataOffModSaved && queue) {
@@ -832,6 +837,8 @@ void webServer::sendHttpResponse(QTcpSocket *socket, int statusCode, const QStri
     QByteArray response;
     response.append(QString("HTTP/1.1 %1 %2\r\n").arg(statusCode).arg(statusText).toUtf8());
     response.append("Content-Type: " + contentType + "\r\n");
+    if (contentType.startsWith("application/x-adif"))
+        response.append("Content-Disposition: attachment; filename=logbook.adi\r\n");
     response.append(QString("Content-Length: %1\r\n").arg(body.size()).toUtf8());
     response.append("Connection: close\r\n");
     response.append("Access-Control-Allow-Origin: *\r\n");
@@ -896,6 +903,34 @@ void webServer::handleRestRequest(QTcpSocket *socket, const QString &method,
         if (err.error != QJsonParseError::NoError || !doc.isObject()) return QJsonObject();
         return doc.object();
     };
+
+    // --- Server-side station logbook ---
+    if (p == "/api/v1/logbook/adif") {
+        if (method != "GET") { QJsonObject e{{"error","Method not allowed"}}; sendRestResponse(socket,405,e); return; }
+        QFile file(logbookPath_);
+        if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) { sendHttpResponse(socket,500,"Internal Server Error","text/plain",file.errorString().toUtf8()); return; }
+        sendHttpResponse(socket,200,"OK","application/x-adif; charset=utf-8",file.readAll()); return;
+    }
+    if (p == "/api/v1/logbook") {
+        if (method == "GET") {
+            QJsonArray entries; for (const QJsonObject &qso : std::as_const(qsoLog_)) entries.append(qso);
+            sendRestResponse(socket,200,QJsonObject{{"entries",entries}});
+        } else if (method == "POST") {
+            QJsonObject qso=normalizeQso(parseBody());
+            if (qso.isEmpty()) { sendRestResponse(socket,400,QJsonObject{{"error","A valid call is required"}}); }
+            else { qsoLog_.prepend(qso); writeLogbook(); broadcastLogbook(); wsjtxSendQso(qso); sendRestResponse(socket,202,qso); }
+        } else sendRestResponse(socket,405,QJsonObject{{"error","Method not allowed"}});
+        return;
+    }
+    if (p.startsWith("/api/v1/logbook/")) {
+        const QString id=p.mid(QString("/api/v1/logbook/").size());
+        int index=-1; for (int i=0;i<qsoLog_.size();++i) if(qsoLog_[i].value("id").toString()==id){index=i;break;}
+        if(index<0){sendRestResponse(socket,404,QJsonObject{{"error","QSO not found"}});return;}
+        if(method=="PUT") { QJsonObject qso=normalizeQso(parseBody(),id); if(qso.isEmpty()) sendRestResponse(socket,400,QJsonObject{{"error","A valid call is required"}}); else {qsoLog_[index]=qso;writeLogbook();broadcastLogbook();sendRestResponse(socket,200,qso);} }
+        else if(method=="DELETE") {qsoLog_.removeAt(index);writeLogbook();broadcastLogbook();sendRestResponse(socket,202,QJsonObject{{"status","deleted"}});}
+        else sendRestResponse(socket,405,QJsonObject{{"error","Method not allowed"}});
+        return;
+    }
 
     // --- GET /api/v1/radio ---
     if (p == "/api/v1/radio") {
@@ -1759,7 +1794,55 @@ void webServer::handleCommand(QWebSocket *client, const QJsonObject &cmd)
     QString type = cmd["cmd"].toString();
 
     if (type == "qsoLogged") {
-        handleQsoLogged(client, cmd["qso"].toObject());
+        handleQsoLogged(cmd["qso"].toObject());
+    }
+    else if (type == "updateQso") {
+        const QString id = cmd["id"].toString();
+        for (int i=0; i<qsoLog_.size(); ++i) if (qsoLog_[i].value("id").toString()==id) {
+            QJsonObject replacement=normalizeQso(cmd["qso"].toObject(),id);
+            if (!replacement.isEmpty()) { qsoLog_[i]=replacement; writeLogbook(); broadcastLogbook(); }
+            break;
+        }
+    }
+    else if (type == "deleteQso") {
+        const QString id = cmd["id"].toString();
+        for (int i=0; i<qsoLog_.size(); ++i) if (qsoLog_[i].value("id").toString()==id) { qsoLog_.removeAt(i); writeLogbook(); broadcastLogbook(); break; }
+    }
+    else if (type == "mergeLogbook") {
+        const QJsonArray entries = cmd["entries"].toArray();
+        bool changed = false;
+        for (const QJsonValue &value : entries) {
+            QJsonObject incoming = normalizeQso(value.toObject());
+            if (incoming.isEmpty()) continue;
+            bool duplicate = false;
+            for (const QJsonObject &existing : std::as_const(qsoLog_)) {
+                duplicate = existing.value("date") == incoming.value("date")
+                         && existing.value("time") == incoming.value("time")
+                         && existing.value("call") == incoming.value("call")
+                         && existing.value("freq") == incoming.value("freq")
+                         && existing.value("mode") == incoming.value("mode");
+                if (duplicate) break;
+            }
+            if (!duplicate) { qsoLog_.prepend(incoming); changed = true; }
+        }
+        if (changed) { writeLogbook(); broadcastLogbook(); }
+    }
+    else if (type == "setWsjtx") {
+        const QString target=cmd["target"].toString().trimmed();
+        wsjtxTarget_=target;
+        wsjtxEnabled_=false; if (wsjtxHeartbeatTimer_) wsjtxHeartbeatTimer_->stop();
+        if (!wsjtxForcedOff_ && cmd["enabled"].toBool() && !target.isEmpty()) configureWsjtxTarget(target);
+        wsjtxDecodes_=cmd["decodes"].toBool();
+        std::unique_ptr<QSettings> settings(packetSettingsFile_.isEmpty()?new QSettings():new QSettings(packetSettingsFile_,QSettings::IniFormat));
+        settings->setValue("WSJTX/Enabled",cmd["enabled"].toBool()); settings->setValue("WSJTX/Target",target); settings->setValue("WSJTX/Decodes",wsjtxDecodes_);
+    }
+    else if (type == "setLogbookPath") {
+        QString path=cmd["path"].toString().trimmed();
+        if (!path.isEmpty()) {
+            if (QFileInfo(path).isRelative() && !packetSettingsFile_.isEmpty()) path=QFileInfo(packetSettingsFile_).dir().filePath(path);
+            QDir().mkpath(QFileInfo(path).absolutePath()); const bool exists=QFileInfo::exists(path); logbookPath_=QDir::cleanPath(path); if (exists) { loadLogbook(); broadcastLogbook(); } else writeLogbook();
+            std::unique_ptr<QSettings> settings(packetSettingsFile_.isEmpty()?new QSettings():new QSettings(packetSettingsFile_,QSettings::IniFormat)); settings->setValue("Logbook",cmd["path"].toString().trimmed());
+        }
     }
     else if (type == "setFrequency") {
         quint64 hz = cmd["value"].toVariant().toULongLong();
@@ -3102,6 +3185,10 @@ void webServer::handleCommand(QWebSocket *client, const QJsonObject &cmd)
             if (freqHz > 0) pskReporter->updateFrequency(freqHz);
             pskReporter->updateRxSpotWithGrid(call, grid, mode, snr);
         }
+        if (wsjtxEnabled_ && wsjtxDecodes_) {
+            const QTime time=QTime::fromString(cmd["time"].toString(),"hh:mm:ss");
+            wsjtxSendDatagram(2,[&](QDataStream&o){ o<<true<<time<<qint32(cmd["snr"].toInt())<<cmd["dt"].toDouble()<<quint32(cmd["df"].toInt())<<cmd["mode"].toString()<<cmd["message"].toString()<<false<<false; });
+        }
     }
     else {
         qWarning() << "Web: Unknown command:" << type;
@@ -3112,59 +3199,13 @@ void webServer::handleCommand(QWebSocket *client, const QJsonObject &cmd)
     }
 }
 
-void webServer::handleQsoLogged(QWebSocket *client, const QJsonObject &input)
+void webServer::handleQsoLogged(const QJsonObject &input)
 {
-    Q_UNUSED(client)
-
-    // Keep the event schema deliberately small and stable.  Besides limiting
-    // untrusted WebSocket input, copying known fields makes JSONL consumers
-    // independent of browser-only implementation details.
-    const QString call = input.value("call").toString().trimmed().toUpper();
-    if (call.isEmpty() || call.size() > 32) {
-        qWarning() << "Web: Ignoring invalid qsoLogged event";
-        return;
-    }
-
-    QJsonObject qso;
-    const auto copyString = [&input, &qso](const char *name, int maxLength) {
-        const QString value = input.value(QLatin1String(name)).toString().left(maxLength);
-        if (!value.isEmpty()) qso[QLatin1String(name)] = value;
-    };
-    copyString("date", 8);
-    copyString("time", 6);
-    qso["call"] = call;
-    if (input.value("freq").isDouble()) {
-        const qint64 freq = input.value("freq").toVariant().toLongLong();
-        if (freq >= 0) qso["freq"] = freq;
-    }
-    copyString("band", 16);
-    copyString("mode", 16);
-    if (input.value("df").isDouble()) qso["df"] = input.value("df").toInt();
-    copyString("grid", 16);
-    copyString("theirGrid", 16);
-    copyString("rstSent", 16);
-    copyString("rstRcvd", 16);
-
-    const QByteArray json = QJsonDocument(qso).toJson(QJsonDocument::Compact);
-    const QString dataDir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-    QDir().mkpath(dataDir);
-    const QString path = QDir(dataDir).filePath(QStringLiteral("qso-log.jsonl"));
-    QFile log(path);
-    if (log.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text)) {
-        log.write(json);
-        log.write("\n");
-        log.close();
-    } else {
-        qWarning().noquote() << "Web: Could not append QSO log" << path << log.errorString();
-    }
-
-    // The fixed prefix is suitable for journalctl-based hooks, while the
-    // broadcast lets another WebSocket client consume events in real time.
-    qInfo().noquote() << "WFWEB_QSO_LOGGED" << QString::fromUtf8(json);
-    QJsonObject event;
-    event["type"] = "qsoLogged";
-    event["qso"] = qso;
-    sendJsonToAll(event);
+    QJsonObject qso = normalizeQso(input);
+    if (qso.isEmpty()) return;
+    qsoLog_.prepend(qso);
+    if (!writeLogbook()) qsoLog_.removeFirst();
+    else { broadcastLogbook(); wsjtxSendQso(qso); }
 }
 
 QJsonObject webServer::buildInfoJson() const
@@ -3308,7 +3349,13 @@ void webServer::sendCurrentState(QWebSocket *client)
     if (!audioConfigured && !audioErrorReason.isEmpty()) {
         info["audioError"] = audioErrorReason;
     }
+    info["wsjtxEnabled"] = wsjtxEnabled_;
+    info["wsjtxTarget"] = wsjtxTarget_;
+    info["wsjtxDecodes"] = wsjtxDecodes_;
+    info["logbookPath"] = logbookPath_;
     sendJsonTo(client, info);
+    QJsonArray entries; for (const QJsonObject &qso : std::as_const(qsoLog_)) entries.append(qso);
+    sendJsonTo(client, QJsonObject{{"type","logbook"},{"entries",entries}});
 
     // Send current status
     if (rigCaps) {
@@ -5718,6 +5765,157 @@ void webServer::onUsbAudioOutputStateChanged(QAudio::State state)
 void webServer::setSettingsFile(const QString &path)
 {
     packetSettingsFile_ = path;
+}
+
+void webServer::configureLogbook(const QString &logbookOverride,
+                                 const QString &wsjtxOverride,
+                                 bool noWsjtx, bool wsjtxDecodes)
+{
+    std::unique_ptr<QSettings> settings(packetSettingsFile_.isEmpty()
+        ? new QSettings()
+        : new QSettings(packetSettingsFile_, QSettings::IniFormat));
+    QString configured = logbookOverride.isEmpty()
+        ? settings->value("Logbook").toString() : logbookOverride;
+    if (configured.isEmpty())
+        configured = QDir(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation))
+                         .filePath(QStringLiteral("logbook.adi"));
+    else if (QFileInfo(configured).isRelative() && !packetSettingsFile_.isEmpty())
+        configured = QFileInfo(packetSettingsFile_).dir().filePath(configured);
+    logbookPath_ = QDir::cleanPath(configured);
+    QDir().mkpath(QFileInfo(logbookPath_).absolutePath());
+    loadLogbook();
+
+    wsjtxDecodes_ = wsjtxDecodes || settings->value("WSJTX/Decodes", false).toBool();
+    wsjtxForcedOff_=noWsjtx;
+    const QString target = wsjtxOverride.isEmpty()
+        ? settings->value("WSJTX/Target").toString() : wsjtxOverride;
+    wsjtxTarget_=target;
+    const bool enabled = !wsjtxOverride.isEmpty() || settings->value("WSJTX/Enabled", !target.isEmpty()).toBool();
+    if (!noWsjtx && enabled && !target.isEmpty()) configureWsjtxTarget(target);
+}
+
+QJsonObject webServer::normalizeQso(const QJsonObject &input, const QString &existingId) const
+{
+    const QString call = input.value("call").toString().trimmed().toUpper();
+    if (call.isEmpty() || call.size() > 32) return QJsonObject();
+    QJsonObject qso;
+    qso["id"] = existingId.isEmpty()
+        ? QUuid::createUuid().toString(QUuid::WithoutBraces) : existingId;
+    const auto copy = [&input, &qso](const char *key, int max) {
+        const QString value = input.value(QLatin1String(key)).toString().trimmed().left(max);
+        if (!value.isEmpty()) qso[QLatin1String(key)] = value;
+    };
+    copy("date", 8); copy("time", 6);
+    qso["call"] = call;
+    const qint64 freq = input.value("freq").toVariant().toLongLong();
+    if (freq >= 0) qso["freq"] = freq;
+    copy("band", 16); copy("mode", 16); copy("grid", 16); copy("theirGrid", 16);
+    copy("rstSent", 16); copy("rstRcvd", 16); copy("comment", 256); copy("name", 128);
+    if (input.contains("df")) qso["df"] = input.value("df").toInt();
+    return qso;
+}
+
+QByteArray webServer::qsoToAdif(const QJsonObject &qso) const
+{
+    QByteArray out;
+    const auto field = [&out](const char *tag, const QString &value, const char *type = nullptr) {
+        if (value.isEmpty()) return;
+        const QByteArray bytes = value.toUtf8();
+        out += '<'; out += tag; out += ':'; out += QByteArray::number(bytes.size());
+        if (type) { out += ':'; out += type; }
+        out += '>'; out += bytes; out += ' ';
+    };
+    field("APP_WFWEB_ID", qso.value("id").toString());
+    field("CALL", qso.value("call").toString());
+    field("QSO_DATE", qso.value("date").toString());
+    field("TIME_ON", qso.value("time").toString());
+    if (qso.value("freq").toVariant().toLongLong() > 0)
+        field("FREQ", QString::number(qso.value("freq").toVariant().toLongLong() / 1e6, 'f', 6));
+    field("BAND", qso.value("band").toString()); field("MODE", qso.value("mode").toString());
+    field("RST_SENT", qso.value("rstSent").toString()); field("RST_RCVD", qso.value("rstRcvd").toString());
+    field("GRIDSQUARE", qso.value("theirGrid").toString()); field("MY_GRIDSQUARE", qso.value("grid").toString());
+    field("COMMENT", qso.value("comment").toString()); field("NAME", qso.value("name").toString());
+    out += "<EOR>\n";
+    return out;
+}
+
+void webServer::loadLogbook()
+{
+    qsoLog_.clear();
+    QFile file(logbookPath_);
+    if (!file.exists()) { writeLogbook(); return; }
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) return;
+    const QString text = QString::fromUtf8(file.readAll());
+    const QRegularExpression recordRx(QStringLiteral("(.*?<EOR>)"), QRegularExpression::CaseInsensitiveOption | QRegularExpression::DotMatchesEverythingOption);
+    const QRegularExpression fieldRx(QStringLiteral("<([^:>]+):(\\d+)(?::[^>]*)?>([^<]*)"), QRegularExpression::CaseInsensitiveOption);
+    auto records = recordRx.globalMatch(text);
+    while (records.hasNext()) {
+        const QString record = records.next().captured(1);
+        QHash<QString, QString> f;
+        auto fields = fieldRx.globalMatch(record);
+        while (fields.hasNext()) { auto m = fields.next(); f[m.captured(1).toUpper()] = m.captured(3).left(m.captured(2).toInt()); }
+        if (f.value("CALL").isEmpty()) continue;
+        QJsonObject raw{{"call",f["CALL"]},{"date",f["QSO_DATE"]},{"time",f["TIME_ON"]},{"band",f["BAND"]},{"mode",f["MODE"]},{"rstSent",f["RST_SENT"]},{"rstRcvd",f["RST_RCVD"]},{"theirGrid",f["GRIDSQUARE"]},{"grid",f["MY_GRIDSQUARE"]},{"comment",f["COMMENT"]},{"name",f["NAME"]}};
+        raw["freq"] = qRound64(f.value("FREQ").toDouble() * 1e6);
+        qsoLog_.append(normalizeQso(raw, f.value("APP_WFWEB_ID")));
+    }
+    std::reverse(qsoLog_.begin(), qsoLog_.end());
+}
+
+bool webServer::writeLogbook() const
+{
+    QSaveFile file(logbookPath_);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) return false;
+    file.write("ADIF Export from wfweb\n<ADIF_VER:5>3.1.4 <PROGRAMID:5>wfweb <EOH>\n");
+    for (auto it = qsoLog_.crbegin(); it != qsoLog_.crend(); ++it) file.write(qsoToAdif(*it));
+    return file.commit();
+}
+
+void webServer::broadcastLogbook()
+{
+    QJsonArray entries; for (const QJsonObject &qso : std::as_const(qsoLog_)) entries.append(qso);
+    QJsonObject event{{"type","logbook"},{"entries",entries}};
+    sendJsonToAll(event);
+}
+
+bool webServer::configureWsjtxTarget(const QString &target)
+{
+    QString host = target.trimmed(); quint16 port = 2237;
+    const int colon = host.lastIndexOf(':');
+    if (colon > 0 && !host.mid(colon + 1).contains(':')) { bool ok=false; int p=host.mid(colon+1).toInt(&ok); if (ok && p>0 && p<65536) { port=p; host=host.left(colon); } }
+    QHostAddress address;
+    if (!address.setAddress(host)) { const auto found=QHostInfo::fromName(host).addresses(); if (found.isEmpty()) return false; address=found.first(); }
+    wsjtxAddress_=address; wsjtxPort_=port; wsjtxEnabled_=true;
+    if (!wsjtxSocket_) wsjtxSocket_=new QUdpSocket(this);
+    if (!wsjtxHeartbeatTimer_) { wsjtxHeartbeatTimer_=new QTimer(this); connect(wsjtxHeartbeatTimer_, &QTimer::timeout, this, &webServer::wsjtxSendHeartbeat); }
+    wsjtxHeartbeatTimer_->start(15000); wsjtxSendHeartbeat(); return true;
+}
+
+void webServer::wsjtxSendDatagram(quint32 type, const std::function<void(QDataStream &)> &fields)
+{
+    if (!wsjtxEnabled_ || !wsjtxSocket_) return;
+    QByteArray packet; QDataStream out(&packet, QIODevice::WriteOnly); out.setVersion(QDataStream::Qt_5_0); out.setByteOrder(QDataStream::BigEndian);
+    out << quint32(0xadbccbda) << quint32(3) << type << wsjtxId_; fields(out);
+    wsjtxSocket_->writeDatagram(packet, wsjtxAddress_, wsjtxPort_);
+}
+void webServer::wsjtxSendHeartbeat() { wsjtxSendDatagram(0, [](QDataStream &o){ o << quint32(3) << QString(WFWEB_VERSION) << QString(); }); wsjtxSendStatus(); }
+void webServer::wsjtxSendStatus()
+{
+    quint64 frequency=0; QString mode;
+    if (queue && rigCaps) {
+        const vfoCommandType v=queue->getVfoCommand(vfoA,0,false);
+        const cacheItem fc=queue->getCache(v.freqFunc,v.receiver); if(fc.value.isValid()) frequency=fc.value.value<freqt>().Hz;
+        const cacheItem mc=queue->getCache(v.modeFunc,v.receiver); if(mc.value.isValid()) mode=modeToString(mc.value.value<modeInfo>());
+    }
+    wsjtxSendDatagram(1,[&](QDataStream&o){ o<<frequency<<mode<<QString()<<QString()<<mode<<false<<false<<false<<quint32(0)<<quint32(0)<<QString()<<QString()<<false<<QString()<<false<<quint8(0)<<quint32(0)<<quint32(0)<<QString()<<QString(); });
+}
+void webServer::wsjtxSendClose() { if (wsjtxEnabled_) wsjtxSendDatagram(6, [](QDataStream &){}); }
+void webServer::wsjtxSendQso(const QJsonObject &q)
+{
+    wsjtxSendStatus();
+    const QDate d=QDate::fromString(q.value("date").toString(),"yyyyMMdd"); const QTime t=QTime::fromString(q.value("time").toString(),"hhmmss"); const QDateTime dt(d,t,Qt::UTC);
+    wsjtxSendDatagram(5,[&](QDataStream&o){ o<<dt<<q.value("call").toString()<<q.value("theirGrid").toString()<<quint64(q.value("freq").toVariant().toULongLong())<<q.value("mode").toString()<<q.value("rstSent").toString()<<q.value("rstRcvd").toString()<<QString()<<q.value("comment").toString()<<q.value("name").toString()<<dt<<QString()<<QString()<<q.value("grid").toString()<<QString()<<QString()<<QString(); });
+    const QByteArray adif=qsoToAdif(q).trimmed(); wsjtxSendDatagram(12,[&](QDataStream&o){ o<<adif; });
 }
 
 void webServer::setInstanceName(const QString &name)

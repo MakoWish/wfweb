@@ -68,6 +68,10 @@ struct cmdLineOverrides {
     // -n/--name: label shown in the web UI top bar and browser tab instead
     // of the rig model, to tell several wfweb instances apart
     QString name;
+    QString logbook;
+    QString wsjtxTarget;
+    bool noWsjtx = false;
+    bool wsjtxDecodes = false;
 };
 
 class servermain : public QObject

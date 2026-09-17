@@ -17,6 +17,9 @@
 #include <QSslSocket>
 #include <QSslKey>
 #include <QSslCertificate>
+#include <QUdpSocket>
+#include <QDataStream>
+#include <functional>
 
 #if (QT_VERSION < QT_VERSION_CHECK(6,0,0))
 #include <QAudioDeviceInfo>
@@ -109,6 +112,9 @@ public slots:
     // --name tag: sent to the browser as rigInfo.name so the top bar and
     // tab title show it instead of the rig model.
     void setInstanceName(const QString &name);
+    void configureLogbook(const QString &logbookOverride,
+                          const QString &wsjtxOverride,
+                          bool noWsjtx, bool wsjtxDecodes);
     // PTT requested via rigctld (Hamlib TCP). Routed through the same
     // setPTT path the WebSocket clients use, so RADE EOO synthesis,
     // packet TX gating and ALC meter polling stay coherent.
@@ -204,7 +210,18 @@ private:
     // both, which is the structural unification of TX audio plumbing.
     void txWritePcmFrame(const QByteArray &pcmMonoLE, bool applyGain);
     void handleCommand(QWebSocket *client, const QJsonObject &cmd);
-    void handleQsoLogged(QWebSocket *client, const QJsonObject &qso);
+    void handleQsoLogged(const QJsonObject &qso);
+    void loadLogbook();
+    bool writeLogbook() const;
+    QJsonObject normalizeQso(const QJsonObject &input, const QString &id = QString()) const;
+    QByteArray qsoToAdif(const QJsonObject &qso) const;
+    void broadcastLogbook();
+    void wsjtxSendHeartbeat();
+    void wsjtxSendStatus();
+    void wsjtxSendQso(const QJsonObject &qso);
+    void wsjtxSendClose();
+    void wsjtxSendDatagram(quint32 type, const std::function<void(QDataStream &)> &fields);
+    bool configureWsjtxTarget(const QString &target);
     void requestVfoUpdate();
     void disableFreeDV();
     bool isFreeDVCompatibleMode(rigMode_t mk) const;
@@ -507,6 +524,17 @@ private:
     // resolves the -s flag.  Empty means "use the default (QSettings org/app)".
     QString packetSettingsFile_;
     QString instanceName_;
+    QString logbookPath_;
+    QList<QJsonObject> qsoLog_;
+    QUdpSocket *wsjtxSocket_ = nullptr;
+    QHostAddress wsjtxAddress_;
+    quint16 wsjtxPort_ = 2237;
+    bool wsjtxEnabled_ = false;
+    bool wsjtxDecodes_ = false;
+    bool wsjtxForcedOff_ = false;
+    QTimer *wsjtxHeartbeatTimer_ = nullptr;
+    QString wsjtxId_ = QStringLiteral("wfweb");
+    QString wsjtxTarget_;
     void    packetLoadSettings();
     void    packetSaveSettings();
 

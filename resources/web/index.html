@@ -2456,6 +2456,17 @@ body.digi-open #bottomBar { grid-row: 5; }
                 </label>
                 <span id="digiPskReporterStatus" style="font-size:10px;color:#556;margin-left:8px"></span>
             </div>
+            <div class="digi-settings-field" style="margin-top:6px;flex-direction:column;align-items:flex-start">
+                <span class="digi-field-label">LOGBOOK:</span>
+                <input type="text" id="digiLogbookPath" class="wf-field" placeholder="logbook.adi" style="width:260px">
+                <label style="display:flex;align-items:center;gap:6px;color:#8cf;font-size:12px;cursor:pointer">
+                    <input type="checkbox" id="digiWsjtxEnable"><span>WSJT-X UDP output</span>
+                </label>
+                <input type="text" id="digiWsjtxTarget" class="wf-field" placeholder="host:2237" style="width:190px">
+                <label style="display:flex;align-items:center;gap:6px;color:#8cf;font-size:11px;cursor:pointer">
+                    <input type="checkbox" id="digiWsjtxDecodes"><span>Forward FT8/FT4 decodes</span>
+                </label>
+            </div>
             <button id="digiSettingsCloseBtn" class="digi-settings-close">Close</button>
         </div>
 
@@ -3095,6 +3106,9 @@ function handleMessage(msg) {
             }
             if (msg.model) rigModelName = msg.model;
             if (msg.name !== undefined) rigTagName = msg.name || '';
+            var wse=document.getElementById('digiWsjtxEnable'), wst=document.getElementById('digiWsjtxTarget'), wsd=document.getElementById('digiWsjtxDecodes');
+            if(wse) wse.checked=!!msg.wsjtxEnabled; if(wst && msg.wsjtxTarget!==undefined) wst.value=msg.wsjtxTarget; if(wsd) wsd.checked=!!msg.wsjtxDecodes;
+            var lbp=document.getElementById('digiLogbookPath'); if(lbp && msg.logbookPath!==undefined) lbp.value=msg.logbookPath;
             updateRigTag();
             if (msg.freedvModes) freedvModes = msg.freedvModes;
             if (msg.isLan !== undefined || msg.lanConnected !== undefined) {
@@ -3319,6 +3333,19 @@ function handleMessage(msg) {
             break;
         case 'pskReporterStatus':
             updatePskReporterStatus(msg);
+            break;
+        case 'logbook':
+            qsoLog = Array.isArray(msg.entries) ? msg.entries : [];
+            renderDigiLog();
+            if (!window._qsoMigrationChecked) {
+                window._qsoMigrationChecked = true;
+                try {
+                    var legacy = localStorage.getItem('qsoLog') || localStorage.getItem('digiQsoLog');
+                    if (legacy) send({ cmd: 'mergeLogbook', entries: JSON.parse(legacy) });
+                    localStorage.removeItem('qsoLog');
+                    localStorage.removeItem('digiQsoLog');
+                } catch(e) { console.warn('Could not migrate browser QSO log', e); }
+            }
             break;
         case 'radeCallsign':
             radeRxCallsign = msg.callsign || '';
@@ -8095,7 +8122,11 @@ function reportDigiSpot(d) {
         grid: grid,
         mode: digiMode,
         snr: Math.round(d.snr || 0),
-        freq: rfFreq
+        freq: rfFreq,
+        dt: Number(d.dt || 0),
+        df: Math.round(d.freq || 0),
+        time: d.time || '',
+        message: d.msg || ''
     });
 }
 
@@ -10146,7 +10177,6 @@ function freqToBand(hz) {
 function commitQsoLogEntry(entry, alreadyAdded) {
     if (!entry || !entry.call) return null;
     if (!alreadyAdded) qsoLog.unshift(entry);
-    try { localStorage.setItem('qsoLog', JSON.stringify(qsoLog.slice(0, 500))); } catch(e) {}
     renderDigiLog();
     send({ cmd: 'qsoLogged', qso: entry });
     return entry;
@@ -10319,7 +10349,6 @@ function editDigiQso(idx) {
     // If we were editing a blank new entry, remove it
     if (digiLogEditIdx >= 0 && digiLogEditIdx !== idx && qsoLog[digiLogEditIdx] && !qsoLog[digiLogEditIdx].call) {
         qsoLog.splice(digiLogEditIdx, 1);
-        try { localStorage.setItem('qsoLog', JSON.stringify(qsoLog.slice(0, 500))); } catch(e) {}
         if (idx > digiLogEditIdx) idx--;
     }
     digiLogEditIdx = idx;
@@ -10333,7 +10362,6 @@ function cancelEditDigiQso() {
     // If we were editing a blank new entry, remove it
     if (digiLogEditIdx >= 0 && qsoLog[digiLogEditIdx] && !qsoLog[digiLogEditIdx].call) {
         qsoLog.splice(digiLogEditIdx, 1);
-        try { localStorage.setItem('qsoLog', JSON.stringify(qsoLog.slice(0, 500))); } catch(e) {}
     }
     digiLogEditIdx = -1;
     renderDigiLog();
@@ -10369,7 +10397,7 @@ function saveDigiQso(idx) {
     digiLogEditIdx = -1;
     if (isNewQso) commitQsoLogEntry(q, true);
     else {
-        try { localStorage.setItem('qsoLog', JSON.stringify(qsoLog.slice(0, 500))); } catch(e) {}
+        send({ cmd: 'updateQso', id: q.id, qso: q });
         renderDigiLog();
     }
 }
@@ -10402,47 +10430,13 @@ function addDigiQso() {
 function deleteDigiQso(idx) {
     if (digiLogEditIdx === idx) digiLogEditIdx = -1;
     else if (digiLogEditIdx > idx) digiLogEditIdx--;
-    qsoLog.splice(idx, 1);
-    try { localStorage.setItem('qsoLog', JSON.stringify(qsoLog.slice(0, 500))); } catch(e) {}
+    var removed = qsoLog.splice(idx, 1)[0];
+    if (removed && removed.id) send({ cmd: 'deleteQso', id: removed.id });
     renderDigiLog();
 }
 
 function downloadAdif() {
-    function adifField(tag, val) {
-        if (!val) return '';
-        var s = String(val);
-        return '<' + tag + ':' + s.length + '>' + s + ' ';
-    }
-    var lines = ['ADIF Export from wfweb\n<EOH>\n'];
-    for (var i = qsoLog.length - 1; i >= 0; i--) {
-        var q = qsoLog[i];
-        if (!q.call) continue;
-        var freqMHz = q.freq ? (q.freq / 1e6).toFixed(6) : '';
-        lines.push(
-            adifField('CALL', q.call) +
-            adifField('QSO_DATE', q.date) +
-            adifField('TIME_ON', q.time) +
-            adifField('FREQ', freqMHz) +
-            adifField('BAND', q.band) +
-            adifField('MODE', q.mode) +
-            adifField('RST_SENT', q.rstSent) +
-            adifField('RST_RCVD', q.rstRcvd) +
-            adifField('GRIDSQUARE', q.theirGrid) +
-            adifField('MY_GRIDSQUARE', q.grid) +
-            '<EOR>\n'
-        );
-    }
-    var now = new Date();
-    var iso = now.toISOString();
-    var ts = iso.substr(0, 10).replace(/-/g, '') + '_' + iso.substr(11, 8).replace(/:/g, '');
-    var myCall = ((document.getElementById('digiMyCall') || {}).value || '').toUpperCase().replace(/[^A-Z0-9]/g, '') || 'LOG';
-    var filename = 'wfweb_' + myCall + '_' + ts + '.adi';
-    var blob = new Blob([lines.join('')], { type: 'text/plain' });
-    var a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = filename;
-    a.click();
-    URL.revokeObjectURL(a.href);
+    window.location.href = '/api/v1/logbook/adif';
 }
 
 var clearLogConfirmTimer = null;
@@ -10465,8 +10459,10 @@ function clearDigiLog() {
     clearTimeout(clearLogConfirmTimer);
     clearLogConfirmTimer = null;
     downloadAdif();
+    for (var i = 0; i < qsoLog.length; i++) {
+        if (qsoLog[i].id) send({ cmd: 'deleteQso', id: qsoLog[i].id });
+    }
     qsoLog = [];
-    try { localStorage.removeItem('qsoLog'); } catch(e) {}
     renderDigiLog();
     if (btn) btn.textContent = '\u2715 Clear Log';
 }
@@ -10500,21 +10496,10 @@ function initDigiHandlers() {
     // Load persisted settings
     var savedCall = window.App.callsign.get();
     var savedGrid = localStorage.getItem('digiGrid');
-    // Load shared QSO log (migrate from old 'digiQsoLog' key if needed)
-    var savedLog = localStorage.getItem('qsoLog') || localStorage.getItem('digiQsoLog');
     var myCallEl = document.getElementById('digiMyCall');
     var gridEl = document.getElementById('digiGrid');
     if (savedCall && myCallEl) myCallEl.value = savedCall;
     if (savedGrid && gridEl) gridEl.value = savedGrid;
-    if (savedLog) {
-        try {
-            qsoLog = JSON.parse(savedLog);
-            renderDigiLog();
-            // Migrate old key
-            localStorage.setItem('qsoLog', JSON.stringify(qsoLog));
-            try { localStorage.removeItem('digiQsoLog'); } catch(e2) {}
-        } catch(e) {}
-    }
 
     // Persist MY call and grid on change; rebuild msg rows on change
     if (myCallEl) {
@@ -10656,6 +10641,9 @@ function initDigiHandlers() {
     var settingsCloseBtn = document.getElementById('digiSettingsCloseBtn');
     if (settingsCloseBtn) {
         settingsCloseBtn.addEventListener('click', function() {
+            var enabled=document.getElementById('digiWsjtxEnable'), target=document.getElementById('digiWsjtxTarget'), decodes=document.getElementById('digiWsjtxDecodes');
+            send({cmd:'setWsjtx',enabled:!!(enabled&&enabled.checked),target:(target&&target.value||'').trim(),decodes:!!(decodes&&decodes.checked)});
+            var logbook=document.getElementById('digiLogbookPath'); if(logbook) send({cmd:'setLogbookPath',path:logbook.value.trim()});
             document.getElementById('digiSettingsModal').classList.remove('visible');
             updateDigiMsgRows();
         });

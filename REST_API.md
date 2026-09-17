@@ -61,30 +61,29 @@ All responses are JSON objects.
 
 ## Endpoints
 
-### QSO logged events
+### Server logbook
 
-Whenever the server-hosted web UI commits a completed QSO, it sends a
-`qsoLogged` WebSocket command containing the browser's existing QSO fields.
-The server:
+The server is the source of truth for the station logbook. It stores standard
+ADIF in `<data directory>/logbook.adi` by default; set `Logbook=` in the
+settings file or pass `--logbook <file>` to choose another path. Relative
+paths in named profiles are resolved next to that profile. On its first
+connection, an older browser-local log is merged into the server log once.
+Every mutation is broadcast to all browsers.
 
-* appends the normalized QSO as one compact JSON object per line to
-  `qso-log.jsonl` in Qt's application data directory;
-* writes the same object to the service log prefixed with
-  `WFWEB_QSO_LOGGED` (and therefore to the systemd journal); and
-* broadcasts `{ "type": "qsoLogged", "qso": { ... } }` to connected
-  WebSocket clients for real-time integrations.
+| Method | Endpoint | Action |
+|---|---|---|
+| `GET` | `/api/v1/logbook` | List entries as `{ "entries": [...] }` |
+| `POST` | `/api/v1/logbook` | Add an entry from a JSON QSO object |
+| `PUT` | `/api/v1/logbook/{id}` | Replace an entry |
+| `DELETE` | `/api/v1/logbook/{id}` | Delete an entry |
+| `GET` | `/api/v1/logbook/adif` | Download the complete ADIF logbook |
 
-For a typical Linux service the file is under the account running wfweb at
-`~/.local/share/wfview/wfweb/qso-log.jsonl`. Use
-`journalctl -u <wfweb-service> -g WFWEB_QSO_LOGGED -f` for a generic event
-hook without depending on that platform-specific path. Draft rows, cancelled
-entries, edits, and deletions do not emit a new-QSO event.
-
-Example event payload:
-
-```json
-{"type":"qsoLogged","qso":{"date":"20260915","time":"165430","call":"WW9WW","freq":14074000,"band":"20M","mode":"FT8","grid":"EM73","rstSent":"-08","rstRcvd":"-11"}}
-```
+Completed contacts can also be emitted using the standard WSJT-X UDP
+protocol (Heartbeat, QSO Logged and Logged ADIF; optional Decode; Close at
+shutdown). Configure `--wsjtx <host[:port]>`, `--no-wsjtx`, and
+`--wsjtx-decodes`, or the matching Station Settings controls. UDP output is
+off by default. A multicast destination is supported. In Docker, use the
+host's LAN address for unicast; multicast generally requires host networking.
 
 ### GET /api/v1/radio
 
