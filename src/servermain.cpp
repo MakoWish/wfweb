@@ -1260,16 +1260,14 @@ void servermain::setManufacturer(manufacturersType_t man)
     this->rigList.clear();
     qInfo() << "Searching for radios with Manufacturer =" << man;
 
-#ifndef Q_OS_LINUX
-    QString systemRigLocation = QCoreApplication::applicationDirPath();
-#else
-    QString systemRigLocation = PREFIX;
-#endif
-
 #ifdef Q_OS_LINUX
-    systemRigLocation += "/share/wfview/rigs";
+    // Rigs shipped next to the binary win (AppImage, relocated or custom-PREFIX
+    // install); otherwise use the compile-time PREFIX, as a distro package does.
+    QString systemRigLocation = QDir::cleanPath(QCoreApplication::applicationDirPath() + "/../share/wfview/rigs");
+    if (!QDir(systemRigLocation).exists())
+        systemRigLocation = QString(PREFIX) + "/share/wfview/rigs";
 #else
-    systemRigLocation +="/rigs";
+    QString systemRigLocation = QCoreApplication::applicationDirPath() + "/rigs";
 #endif
 
     QDir systemRigDir(systemRigLocation);
