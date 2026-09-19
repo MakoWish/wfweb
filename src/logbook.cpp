@@ -327,17 +327,53 @@ bool Logbook::clear(QString *backupPath)
 
 // ---------------------------------------------------------------------------
 // Persistence check (containers)
+//
+// Why: the logbook used to live in each browser, so an ephemeral container
+// lost nothing.  With the server owning the log, a browser hands its copy
+// over on first connect and a container started without a volume keeps that
+// file only until it is recreated (`docker run --rm`, an image upgrade,
+// `docker compose up`).  Nobody wants to discover that after the fact, so
+// the server works out whether its logbook directory will survive and, if
+// not, warns at startup and tells every browser, which then keeps its own
+// copy of what it logs and re-sends it on connect (SPA: logbookPersistent).
+//
+// How, in two steps:
+//   1. "Am I in a container?"  Docker creates /.dockerenv in every
+//      container and Podman creates /run/.containerenv.  As a fallback
+//      /proc/1/cgroup is scanned for the runtime names; on cgroup-v2 hosts
+//      that file often reads just "0::/" inside a container, so the marker
+//      files are the reliable signal.  Outside a container the answer is
+//      always "persistent": this check never produces a false alarm on a
+//      bare-metal or VM install.
+//   2. "Is the logbook directory on something that outlives the
+//      container?"  /proc/self/mountinfo lists every mount visible to the
+//      process.  Take the deepest mount point that contains the directory:
+//        - "/" is the container's own overlay filesystem: the file is part
+//          of the container and is deleted with it.               -> false
+//        - anything else is a named volume or a bind mount.        -> true
+//        - except a Docker/Podman *anonymous* volume, recognisable by its
+//          source path ".../volumes/<64 hex chars>/_data": it survives a
+//          stop/start but `docker run --rm` deletes it on exit and a
+//          recreate orphans it, so it is ephemeral in practice.   -> false
+//      (A tmpfs mounted on the directory would pass as persistent; an
+//      operator who does that chose it.)
+//
+// Limits: runtimes that leave no marker (Kubernetes with containerd or
+// CRI-O, say) are not detected and get no warning.  A miss costs only the
+// warning: the browser still drops its old copy only after the server has
+// confirmed the merge (logbookMerged), never on a fire-and-forget send.
+// This is also why docker/Dockerfile has no VOLUME instruction: it would
+// give an unmounted /data a hidden anonymous volume that masks the problem.
 // ---------------------------------------------------------------------------
 
 bool Logbook::isPersistentLocation(const QString &dir, const QString &mountinfo, bool inContainer)
 {
     if (!inContainer) return true;
-    // /proc/self/mountinfo: "id parent maj:min ROOT MOUNTPOINT opts ... - fstype src sopts".
-    // Find the deepest mount point that contains `dir`.  On the container's
-    // own root overlay that is "/"; a named volume or a bind mount is
-    // anything else.  A Docker/Podman *anonymous* volume (ROOT is
-    // .../volumes/<64 hex>/_data) also counts as ephemeral: it survives a
-    // stop/start but is deleted by `docker run --rm` and on recreate.
+
+    // mountinfo line: "ID PARENT MAJ:MIN ROOT MOUNTPOINT OPTIONS ... - FSTYPE SOURCE SUPEROPTS".
+    // ROOT (f[3]) is the path inside the source filesystem, which for a
+    // Docker volume is /var/lib/docker/volumes/<name>/_data; MOUNTPOINT
+    // (f[4]) is where it appears in the container, with spaces as \040.
     const QString target = QDir::cleanPath(dir);
     QString best, bestRoot;
     const QStringList lines = mountinfo.split('\n', Qt::SkipEmptyParts);
@@ -346,17 +382,19 @@ bool Logbook::isPersistentLocation(const QString &dir, const QString &mountinfo,
         if (f.size() < 5) continue;
         QString mp = f[4];
         mp.replace("\\040", " ");
+        // Path-boundary match: "/data" contains "/data/x" but not "/database".
         const bool contains = mp == "/" || target == mp || target.startsWith(mp + '/');
         if (contains && mp.size() > best.size()) { best = mp; bestRoot = f[3]; }
     }
-    if (best.isEmpty() || best == "/") return false;
+    if (best.isEmpty() || best == "/") return false;   // on the container's own overlay
     static const QRegularExpression anonymousVolume("/volumes/[0-9a-f]{64}/_data$");
-    return !anonymousVolume.match(bestRoot).hasMatch();
+    return !anonymousVolume.match(bestRoot).hasMatch();   // named volume / bind mount: yes
 }
 
 bool Logbook::isPersistentLocation(const QString &dir)
 {
 #ifdef Q_OS_LINUX
+    // Step 1: container markers (see the block comment above).
     bool inContainer = QFile::exists("/.dockerenv") || QFile::exists("/run/.containerenv");
     if (!inContainer) {
         QFile cg("/proc/1/cgroup");
@@ -366,12 +404,13 @@ bool Logbook::isPersistentLocation(const QString &dir)
         }
     }
     if (!inContainer) return true;
+    // Step 2: what is mounted under the logbook directory.
     QFile mi("/proc/self/mountinfo");
     if (!mi.open(QIODevice::ReadOnly)) return true;   // can't tell: don't cry wolf
     return isPersistentLocation(dir, QString::fromUtf8(mi.readAll()), true);
 #else
     Q_UNUSED(dir)
-    return true;
+    return true;   // containers are a Linux deployment story here
 #endif
 }
 

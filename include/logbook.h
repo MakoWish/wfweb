@@ -49,11 +49,26 @@ public:
 
     static QByteArray adifHeader();
     static QList<QsoRecord> parseAdif(const QByteArray &data);
-    // False when the process runs in a container and `dir` sits on the
-    // container's own root filesystem rather than a mounted volume, i.e. the
-    // file dies with the container.  Linux only; elsewhere always true.
+    // Does a logbook in `dir` outlive the process's container?
+    //
+    // Why this exists: before the server-side logbook, the QSO log lived in
+    // each browser, so running wfweb in a throw-away container was harmless.
+    // Now every browser hands its log to the server on first connect, and a
+    // container started without a volume keeps that file only until it is
+    // recreated (`docker run --rm`, an image upgrade, `docker compose up`).
+    // Operators upgrading without reading DOCKER.md would lose their log
+    // silently.  The server therefore checks, warns, and tells the browsers,
+    // which keep their own copy while this is false (see the SPA's
+    // logbookPersistent).
+    //
+    // Answers false only inside a container (Docker or Podman markers, or
+    // the cgroup names) AND when `dir` is on the container's own root
+    // filesystem or on an anonymous volume; see logbook.cpp for the exact
+    // rules and their limits.  Never false outside a container.  Linux only;
+    // on other platforms it is always true.
     static bool isPersistentLocation(const QString &dir);
-    // Testable core of the above: `mountinfo` is /proc/self/mountinfo text.
+    // Testable core of the above: `mountinfo` is the text of
+    // /proc/self/mountinfo and `inContainer` the result of the marker check.
     static bool isPersistentLocation(const QString &dir, const QString &mountinfo, bool inContainer);
     static QString cursorFor(const QsoRecord &r) { return r.sortKey() + QLatin1Char('|') + r.id; }
 

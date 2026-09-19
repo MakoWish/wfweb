@@ -5822,8 +5822,12 @@ void webServer::configureLogbook(const QString &logbookOverride,
         qWarning().noquote() << "Logbook: cannot open or create" << path << "- QSOs will not be saved";
 
     // A container without a volume keeps the file only as long as the
-    // container lives.  Say so loudly here and to every browser, which then
-    // keeps its own copy of what it logs (see the SPA's logbookPersistent).
+    // container lives, and since browsers now hand their log to the server
+    // that would be silent data loss for anyone upgrading a `docker run`
+    // without a -v.  Detection lives in Logbook::isPersistentLocation (see
+    // the block comment there for how and its limits); here we log it and
+    // pass `persistent` to every browser, which keeps its own copy of what
+    // it logs while this is false (SPA: logbookPersistent).
     logbookPersistent_ = Logbook::isPersistentLocation(QFileInfo(path).absolutePath());
     if (!logbookPersistent_)
         qWarning().noquote() << "Logbook: NOT PERSISTENT -" << path
