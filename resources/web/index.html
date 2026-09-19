@@ -1389,6 +1389,7 @@ body.digi-open #bottomBar { grid-row: 5; }
 .digi-log-menu button:hover:not(:disabled) { background: var(--mode-accent-bg); color: var(--mode-accent); }
 .digi-log-menu button:disabled { color: var(--text-faint); cursor: default; }
 .digi-log-menu .hint { display: block; font-size: var(--fs-xs); color: var(--text-dim); margin-top: 2px; }
+.digi-log-menu-info { margin-top: 4px; padding: 6px 10px; border-top: 1px solid #024; font-size: var(--fs-xs); color: var(--text-dim); line-height: 1.4; }
 .digi-log-action-btn {
     padding: 3px 12px;
     background: var(--mode-accent-bg);
@@ -2481,18 +2482,6 @@ body.digi-open #bottomBar { grid-row: 5; }
                 </label>
                 <span id="digiPskReporterStatus" style="font-size:10px;color:#556;margin-left:8px"></span>
             </div>
-            <div class="digi-settings-field" style="margin-top:6px;flex-direction:column;align-items:flex-start;gap:4px">
-                <label style="display:flex;align-items:center;gap:6px;color:#8cf;font-size:12px;cursor:pointer">
-                    <input type="checkbox" id="digiRemoteLogEnable">
-                    <span>Send logged QSOs to an external logging program</span>
-                </label>
-                <span style="font-size:10px;color:var(--text-dim)">GridTracker, JTAlert, Log4OM&hellip; anything that listens for the WSJT-X UDP protocol</span>
-                <input type="text" id="digiRemoteLogTarget" class="wf-field" placeholder="host:2237 or 239.255.0.0:2237" style="width:220px">
-                <label style="display:flex;align-items:center;gap:6px;color:#8cf;font-size:11px;cursor:pointer">
-                    <input type="checkbox" id="digiRemoteLogDecodes">
-                    <span>Also forward FT8/FT4 decodes</span>
-                </label>
-            </div>
             <button id="digiSettingsCloseBtn" class="digi-settings-close">Close</button>
         </div>
 
@@ -2531,6 +2520,7 @@ body.digi-open #bottomBar { grid-row: 5; }
                             <span class="hint">Every QSO, as stored on the server (ADIF)</span></button>
                         <button id="digiAdifImportBtn">&#11121; Import an ADIF file&hellip;
                             <span class="hint">Merged into the logbook; duplicates are skipped</span></button>
+                        <div id="digiRemoteLogStatus" class="digi-log-menu-info"></div>
                     </div>
                     <input type="file" id="digiAdifFile" accept=".adi,.adif,.txt" hidden>
                 </div>
@@ -3027,7 +3017,7 @@ var logbookLoading = false;
 var logbookPersistent = true;   // false: the server's file dies with its container; keep a copy here
 var logbookUnexported = 0;      // QSOs without an export stamp ("Download new" candidates)
 var digiLogStatusTimer = null;
-var remoteLogSettings = null;   // last values received from the server, to send only changes
+var remoteLogStatus = null;     // server-side remote logging state, shown read-only
 var digiLogEditIdx = -1; // index of row currently being edited, -1 = none
 var digiHashBook = null;
 var digiQsoState = 'IDLE';
@@ -3157,13 +3147,8 @@ function handleMessage(msg) {
                 updateDigiLogWarning();
             }
             if (msg.remoteLogTarget !== undefined) {
-                remoteLogSettings = { enabled: !!msg.remoteLogEnabled, target: msg.remoteLogTarget || '', decodes: !!msg.remoteLogDecodes };
-                var rle = document.getElementById('digiRemoteLogEnable');
-                var rlt = document.getElementById('digiRemoteLogTarget');
-                var rld = document.getElementById('digiRemoteLogDecodes');
-                if (rle) rle.checked = remoteLogSettings.enabled;
-                if (rlt) rlt.value = remoteLogSettings.target;
-                if (rld) rld.checked = remoteLogSettings.decodes;
+                remoteLogStatus = { enabled: !!msg.remoteLogEnabled, target: msg.remoteLogTarget || '', decodes: !!msg.remoteLogDecodes };
+                updateRemoteLogStatus();
             }
             updateRigTag();
             if (msg.freedvModes) freedvModes = msg.freedvModes;
@@ -10296,6 +10281,20 @@ function mirrorQsoLocally(entry) {
     } catch(e) {}
 }
 
+// Remote logging is configured on the server (settings file / --remote-log);
+// the browser only shows whether it is on and where it goes.
+function updateRemoteLogStatus() {
+    var el = document.getElementById('digiRemoteLogStatus');
+    if (!el) return;
+    if (!remoteLogStatus) { el.textContent = ''; return; }
+    if (remoteLogStatus.enabled) {
+        el.textContent = 'Remote logging: on, sending QSOs' + (remoteLogStatus.decodes ? ' and decodes' : '') +
+            ' to ' + remoteLogStatus.target + ' (server setting)';
+    } else {
+        el.textContent = 'Remote logging: off (server setting: --remote-log or [RemoteLog] in the config file)';
+    }
+}
+
 function updateDigiLogWarning() {
     var el = document.getElementById('digiLogWarn');
     if (!el) return;
@@ -10965,16 +10964,6 @@ function initDigiHandlers() {
     var settingsCloseBtn = document.getElementById('digiSettingsCloseBtn');
     if (settingsCloseBtn) {
         settingsCloseBtn.addEventListener('click', function() {
-            var rl = {
-                enabled: !!(document.getElementById('digiRemoteLogEnable') || {}).checked,
-                target: ((document.getElementById('digiRemoteLogTarget') || {}).value || '').trim(),
-                decodes: !!(document.getElementById('digiRemoteLogDecodes') || {}).checked
-            };
-            if (!remoteLogSettings || rl.enabled !== remoteLogSettings.enabled ||
-                rl.target !== remoteLogSettings.target || rl.decodes !== remoteLogSettings.decodes) {
-                remoteLogSettings = rl;
-                send({ cmd: 'setRemoteLog', enabled: rl.enabled, target: rl.target, decodes: rl.decodes });
-            }
             document.getElementById('digiSettingsModal').classList.remove('visible');
             updateDigiMsgRows();
         });

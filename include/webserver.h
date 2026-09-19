@@ -228,7 +228,6 @@ private:
     void wsjtxSendClose();
     void wsjtxSendDatagram(const QByteArray &packet);
     bool configureWsjtxTarget(const QString &target);
-    void wsjtxSaveSettings(bool enabled);
     void requestVfoUpdate();
     void disableFreeDV();
     bool isFreeDVCompatibleMode(rigMode_t mk) const;
@@ -538,7 +537,6 @@ private:
     quint16 wsjtxPort_ = 2237;
     bool wsjtxEnabled_ = false;
     bool wsjtxDecodes_ = false;
-    bool wsjtxForcedOff_ = false;
     QTimer *wsjtxHeartbeatTimer_ = nullptr;
     QString wsjtxId_ = QStringLiteral("wfweb");
     QString wsjtxTarget_;

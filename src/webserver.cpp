@@ -1918,17 +1918,6 @@ void webServer::handleCommand(QWebSocket *client, const QJsonObject &cmd)
                                        {"total", logbook_.count()}, {"persistent", logbookPersistent_},
                                        {"unexported", logbook_.unexportedCount()}});
     }
-    else if (type == "setRemoteLog") {
-        const bool enabled = cmd["enabled"].toBool();
-        if (wsjtxEnabled_) wsjtxSendClose();
-        wsjtxEnabled_ = false;
-        if (wsjtxHeartbeatTimer_) wsjtxHeartbeatTimer_->stop();
-        wsjtxTarget_ = cmd["target"].toString().trimmed();
-        wsjtxDecodes_ = cmd["decodes"].toBool();
-        if (!wsjtxForcedOff_ && enabled && !wsjtxTarget_.isEmpty() && !configureWsjtxTarget(wsjtxTarget_))
-            qWarning() << "Remote log: cannot resolve target" << wsjtxTarget_;
-        wsjtxSaveSettings(enabled);
-    }
     else if (type == "setFrequency") {
         quint64 hz = cmd["value"].toVariant().toULongLong();
         if (hz > 0) {
@@ -5884,15 +5873,18 @@ void webServer::configureLogbook(const QString &logbookOverride,
                              << "is inside the container's own filesystem and will be lost when the"
                              << "container is recreated. Mount a volume at /data (see DOCKER.md).";
 
-    // Remote logging: --remote-log implies enable, --no-remote-log wins (same
-    // rules as rigctld).  Settings live under [RemoteLog]; the WSJTX/* keys are
-    // read as a fallback for the dev builds that briefly used them.
+    // Remote logging is a server-side setting only ([RemoteLog] in the
+    // settings file, --remote-log on the command line): where the station's
+    // QSO stream goes is deployment configuration, and the browser has no
+    // login, so it only gets to see the state (rigInfo.remoteLog*).
+    // --remote-log implies enable, --no-remote-log wins (same rules as
+    // rigctld).  The WSJTX/* keys are read as a fallback for the dev builds
+    // that briefly used them.
     const auto setting = [&settings](const char *key, const QVariant &def) {
         const QVariant v = settings->value(QString("RemoteLog/") + key);
         return v.isValid() ? v : settings->value(QString("WSJTX/") + key, def);
     };
     wsjtxDecodes_ = remoteLogDecodes || setting("Decodes", false).toBool();
-    wsjtxForcedOff_ = noRemoteLog;
     wsjtxTarget_ = remoteLogOverride.isEmpty() ? setting("Target", QString()).toString()
                                                : remoteLogOverride;
     const bool enabled = !remoteLogOverride.isEmpty() || setting("Enabled", false).toBool();
@@ -5903,17 +5895,6 @@ void webServer::configureLogbook(const QString &logbookOverride,
                           << "as" << wsjtxId_ << (wsjtxDecodes_ ? "(WSJT-X UDP protocol, with decodes)" : "(WSJT-X UDP protocol)");
     else
         qWarning() << "Remote log: cannot resolve target" << wsjtxTarget_;
-}
-
-void webServer::wsjtxSaveSettings(bool enabled)
-{
-    std::unique_ptr<QSettings> settings(packetSettingsFile_.isEmpty()
-        ? new QSettings()
-        : new QSettings(packetSettingsFile_, QSettings::IniFormat));
-    settings->setValue("RemoteLog/Enabled", enabled);
-    settings->setValue("RemoteLog/Target", wsjtxTarget_);
-    settings->setValue("RemoteLog/Decodes", wsjtxDecodes_);
-    settings->remove("WSJTX");   // keys of the early dev builds
 }
 
 // --- Logbook mutations: file, then WebSocket delta, then WSJT-X ---

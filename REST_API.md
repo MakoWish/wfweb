@@ -146,11 +146,13 @@ Logged ADIF (both, as WSJT-X does), optionally Decode, and Close at shutdown.
 QSO messages fire from the server-side commit, so a manual SSB or CW entry
 goes out the same way an FT8 contact does.
 
-Configure with `--remote-log <host[:port]>` (port 2237 if omitted, implies
-enable), `--no-remote-log` (wins over the settings file) and
-`--remote-log-decodes`, or with the matching Station Settings controls in the
-web UI (`setRemoteLog {enabled,target,decodes}` over the WebSocket; the
-current values come with `rigInfo` as `remoteLogEnabled`, `remoteLogTarget`,
+This is a server-side setting only: `[RemoteLog]` in the settings file
+(`Enabled`, `Target`, `Decodes`) or `--remote-log <host[:port]>` on the
+command line (port 2237 if omitted, implies enable), `--no-remote-log` (wins
+over the settings file) and `--remote-log-decodes`. Where the station's QSO
+stream goes is deployment configuration and the browser has no login, so the
+web UI only shows the state (in the log panel's *Log management* menu; the
+values come with `rigInfo` as `remoteLogEnabled`, `remoteLogTarget`,
 `remoteLogDecodes`). Off by default. The target may be a multicast group such
 as `239.255.0.0:2237`, which is what you need when more than one listener
 runs on the same machine. The client id shown by listeners is `wfweb`, or
