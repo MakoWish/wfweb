@@ -15,9 +15,6 @@
 #include <QTimer>
 #include <QThread>
 #include <QDateTime>
-#include <QRegularExpression>
-#include <QSaveFile>
-#include <QUuid>
 #include <QHostInfo>
 
 #ifdef Q_OS_WIN
@@ -43,12 +40,6 @@
 // power on a full-duty signal. Kept separate from freedvTxGain so the
 // classic-FreeDV ALC loop can't affect RADE.
 static constexpr float RADE_TX_GAIN = 0.4f;
-
-static QByteArray adifHeader()
-{
-    return QByteArray("ADIF Export from wfweb\n"
-                      "<ADIF_VER:5>3.1.4 <PROGRAMID:5>wfweb <EOH>\n");
-}
 
 // Repeater duplex direction on the wire. The browser and the REST clients
 // speak these three names; the parser only ever caches simplex / DUP- / DUP+,
@@ -707,9 +698,13 @@ void webServer::onHttpReadyRead()
     QString method = QString::fromUtf8(parts[0]);
     QString path = QString::fromUtf8(parts[1]);
 
-    // Strip query string
+    // Split off the query string; the logbook list endpoint takes parameters
+    QUrlQuery query;
     int qIdx = path.indexOf('?');
-    if (qIdx >= 0) path = path.left(qIdx);
+    if (qIdx >= 0) {
+        query.setQuery(path.mid(qIdx + 1));
+        path = path.left(qIdx);
+    }
 
     // OPTIONS preflight for CORS
     if (method == "OPTIONS") {
@@ -719,7 +714,7 @@ void webServer::onHttpReadyRead()
 
     // REST API routing
     if (path.startsWith("/api/v1/")) {
-        handleRestRequest(socket, method, path, body);
+        handleRestRequest(socket, method, path, query, body);
         return;
     }
 
@@ -896,7 +891,8 @@ void webServer::sendRestResponse(QTcpSocket *socket, int statusCode, const QJson
 }
 
 void webServer::handleRestRequest(QTcpSocket *socket, const QString &method,
-                                   const QString &path, const QByteArray &body)
+                                   const QString &path, const QUrlQuery &query,
+                                   const QByteArray &body)
 {
     // Normalize path: strip trailing slash
     QString p = path;
@@ -911,31 +907,75 @@ void webServer::handleRestRequest(QTcpSocket *socket, const QString &method,
         return doc.object();
     };
 
-    // --- Server-side station logbook ---
+    // --- Station logbook (see logbook.h) ---
+    // The log is never returned whole: GET pages newest-first with a cursor
+    // so a lifetime log stays cheap for the browser and the Pi alike.
     if (p == "/api/v1/logbook/adif") {
-        if (method != "GET") { QJsonObject e{{"error","Method not allowed"}}; sendRestResponse(socket,405,e); return; }
-        QFile file(logbookPath_);
-        if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) { sendHttpResponse(socket,500,"Internal Server Error","text/plain",file.errorString().toUtf8()); return; }
-        sendHttpResponse(socket,200,"OK","application/x-adif; charset=utf-8",file.readAll()); return;
+        if (method == "GET") {
+            QFile file(logbook_.path());
+            if (!file.open(QIODevice::ReadOnly)) {
+                sendHttpResponse(socket, 500, "Internal Server Error", "text/plain",
+                                 file.errorString().toUtf8());
+                return;
+            }
+            sendHttpResponse(socket, 200, "OK", "application/x-adif; charset=utf-8", file.readAll());
+        } else if (method == "POST") {
+            // Import: merge every record of the posted ADIF document.
+            const int added = logbook_.merge(Logbook::parseAdif(body));
+            qInfo() << "Logbook: imported" << added << "QSOs over REST";
+            if (added) logbookReset();
+            sendRestResponse(socket, 202, QJsonObject{{"added", added}, {"total", logbook_.count()}});
+        } else {
+            sendRestResponse(socket, 405, QJsonObject{{"error", "Method not allowed"}});
+        }
+        return;
     }
     if (p == "/api/v1/logbook") {
         if (method == "GET") {
-            QJsonArray entries; for (const QJsonObject &qso : std::as_const(qsoLog_)) entries.append(qso);
-            sendRestResponse(socket,200,QJsonObject{{"entries",entries}});
+            const Logbook::Page pg = logbook_.page(query.queryItemValue("limit").toInt(),
+                                                   query.queryItemValue("before"),
+                                                   query.queryItemValue("call"));
+            QJsonArray entries;
+            for (const QsoRecord &r : pg.entries) entries.append(r.toJson());
+            QJsonObject out{{"entries", entries}, {"total", logbook_.count()}};
+            if (!pg.next.isEmpty()) out["next"] = pg.next;
+            sendRestResponse(socket, 200, out);
         } else if (method == "POST") {
-            QJsonObject qso=normalizeQso(parseBody());
-            if (qso.isEmpty()) { sendRestResponse(socket,400,QJsonObject{{"error","A valid call is required"}}); }
-            else { qsoLog_.prepend(qso); writeLogbook(); broadcastLogbook(); wsjtxSendQso(qso); sendRestResponse(socket,202,qso); }
-        } else sendRestResponse(socket,405,QJsonObject{{"error","Method not allowed"}});
+            QsoRecord r = QsoRecord::fromJson(parseBody());
+            if (!r.isValid()) {
+                sendRestResponse(socket, 400, QJsonObject{{"error", "A valid call is required"}});
+            } else if (!logbookAdd(r)) {
+                sendRestResponse(socket, 500, QJsonObject{{"error", "Logbook is not writable"}});
+            } else {
+                sendRestResponse(socket, 202, r.toJson());
+            }
+        } else if (method == "DELETE") {
+            if (logbook_.clear()) logbookReset();
+            sendRestResponse(socket, 202, QJsonObject{{"status", "cleared"}});
+        } else {
+            sendRestResponse(socket, 405, QJsonObject{{"error", "Method not allowed"}});
+        }
         return;
     }
     if (p.startsWith("/api/v1/logbook/")) {
-        const QString id=p.mid(QString("/api/v1/logbook/").size());
-        int index=-1; for (int i=0;i<qsoLog_.size();++i) if(qsoLog_[i].value("id").toString()==id){index=i;break;}
-        if(index<0){sendRestResponse(socket,404,QJsonObject{{"error","QSO not found"}});return;}
-        if(method=="PUT") { QJsonObject qso=normalizeQso(parseBody(),id); if(qso.isEmpty()) sendRestResponse(socket,400,QJsonObject{{"error","A valid call is required"}}); else {qsoLog_[index]=qso;writeLogbook();broadcastLogbook();sendRestResponse(socket,200,qso);} }
-        else if(method=="DELETE") {qsoLog_.removeAt(index);writeLogbook();broadcastLogbook();sendRestResponse(socket,202,QJsonObject{{"status","deleted"}});}
-        else sendRestResponse(socket,405,QJsonObject{{"error","Method not allowed"}});
+        const QString id = p.mid(QStringLiteral("/api/v1/logbook/").size());
+        if (!logbook_.find(id)) {
+            sendRestResponse(socket, 404, QJsonObject{{"error", "QSO not found"}});
+        } else if (method == "PUT") {
+            const QsoRecord r = QsoRecord::fromJson(parseBody(), id);
+            if (!r.isValid()) {
+                sendRestResponse(socket, 400, QJsonObject{{"error", "A valid call is required"}});
+            } else if (!logbookUpdate(id, r)) {
+                sendRestResponse(socket, 500, QJsonObject{{"error", "Logbook is not writable"}});
+            } else {
+                sendRestResponse(socket, 200, logbook_.find(id)->toJson());
+            }
+        } else if (method == "DELETE") {
+            logbookRemove(id);
+            sendRestResponse(socket, 202, QJsonObject{{"status", "deleted"}});
+        } else {
+            sendRestResponse(socket, 405, QJsonObject{{"error", "Method not allowed"}});
+        }
         return;
     }
 
@@ -1801,55 +1841,40 @@ void webServer::handleCommand(QWebSocket *client, const QJsonObject &cmd)
     QString type = cmd["cmd"].toString();
 
     if (type == "qsoLogged") {
-        handleQsoLogged(cmd["qso"].toObject());
+        QsoRecord r = QsoRecord::fromJson(cmd["qso"].toObject());
+        if (!logbookAdd(r))
+            qWarning() << "Web: qsoLogged ignored (invalid record or logbook not writable)";
     }
     else if (type == "updateQso") {
         const QString id = cmd["id"].toString();
-        for (int i=0; i<qsoLog_.size(); ++i) if (qsoLog_[i].value("id").toString()==id) {
-            QJsonObject replacement=normalizeQso(cmd["qso"].toObject(),id);
-            if (!replacement.isEmpty()) { qsoLog_[i]=replacement; writeLogbook(); broadcastLogbook(); }
-            break;
-        }
+        logbookUpdate(id, QsoRecord::fromJson(cmd["qso"].toObject(), id));
     }
     else if (type == "deleteQso") {
-        const QString id = cmd["id"].toString();
-        for (int i=0; i<qsoLog_.size(); ++i) if (qsoLog_[i].value("id").toString()==id) { qsoLog_.removeAt(i); writeLogbook(); broadcastLogbook(); break; }
+        logbookRemove(cmd["id"].toString());
+    }
+    else if (type == "clearLogbook") {
+        if (logbook_.clear()) logbookReset();
     }
     else if (type == "mergeLogbook") {
+        // One-time migration of a browser-local (localStorage) log.
+        QList<QsoRecord> incoming;
         const QJsonArray entries = cmd["entries"].toArray();
-        bool changed = false;
-        for (const QJsonValue &value : entries) {
-            QJsonObject incoming = normalizeQso(value.toObject());
-            if (incoming.isEmpty()) continue;
-            bool duplicate = false;
-            for (const QJsonObject &existing : std::as_const(qsoLog_)) {
-                duplicate = existing.value("date") == incoming.value("date")
-                         && existing.value("time") == incoming.value("time")
-                         && existing.value("call") == incoming.value("call")
-                         && existing.value("freq") == incoming.value("freq")
-                         && existing.value("mode") == incoming.value("mode");
-                if (duplicate) break;
-            }
-            if (!duplicate) { qsoLog_.prepend(incoming); changed = true; }
-        }
-        if (changed) { writeLogbook(); broadcastLogbook(); }
+        for (const QJsonValue &v : entries)
+            incoming.append(QsoRecord::fromJson(v.toObject()));
+        const int added = logbook_.merge(incoming);
+        qInfo() << "Logbook: merged" << added << "of" << incoming.size() << "browser-local QSOs";
+        if (added) logbookReset();
     }
     else if (type == "setWsjtx") {
-        const QString target=cmd["target"].toString().trimmed();
-        wsjtxTarget_=target;
-        wsjtxEnabled_=false; if (wsjtxHeartbeatTimer_) wsjtxHeartbeatTimer_->stop();
-        if (!wsjtxForcedOff_ && cmd["enabled"].toBool() && !target.isEmpty()) configureWsjtxTarget(target);
-        wsjtxDecodes_=cmd["decodes"].toBool();
-        std::unique_ptr<QSettings> settings(packetSettingsFile_.isEmpty()?new QSettings():new QSettings(packetSettingsFile_,QSettings::IniFormat));
-        settings->setValue("WSJTX/Enabled",cmd["enabled"].toBool()); settings->setValue("WSJTX/Target",target); settings->setValue("WSJTX/Decodes",wsjtxDecodes_);
-    }
-    else if (type == "setLogbookPath") {
-        QString path=cmd["path"].toString().trimmed();
-        if (!path.isEmpty()) {
-            if (QFileInfo(path).isRelative() && !packetSettingsFile_.isEmpty()) path=QFileInfo(packetSettingsFile_).dir().filePath(path);
-            QDir().mkpath(QFileInfo(path).absolutePath()); const bool exists=QFileInfo::exists(path); logbookPath_=QDir::cleanPath(path); if (exists) { loadLogbook(); broadcastLogbook(); } else writeLogbook();
-            std::unique_ptr<QSettings> settings(packetSettingsFile_.isEmpty()?new QSettings():new QSettings(packetSettingsFile_,QSettings::IniFormat)); settings->setValue("Logbook",cmd["path"].toString().trimmed());
-        }
+        const bool enabled = cmd["enabled"].toBool();
+        if (wsjtxEnabled_) wsjtxSendClose();
+        wsjtxEnabled_ = false;
+        if (wsjtxHeartbeatTimer_) wsjtxHeartbeatTimer_->stop();
+        wsjtxTarget_ = cmd["target"].toString().trimmed();
+        wsjtxDecodes_ = cmd["decodes"].toBool();
+        if (!wsjtxForcedOff_ && enabled && !wsjtxTarget_.isEmpty() && !configureWsjtxTarget(wsjtxTarget_))
+            qWarning() << "WSJT-X UDP: cannot resolve target" << wsjtxTarget_;
+        wsjtxSaveSettings(enabled);
     }
     else if (type == "setFrequency") {
         quint64 hz = cmd["value"].toVariant().toULongLong();
@@ -3192,16 +3217,7 @@ void webServer::handleCommand(QWebSocket *client, const QJsonObject &cmd)
             if (freqHz > 0) pskReporter->updateFrequency(freqHz);
             pskReporter->updateRxSpotWithGrid(call, grid, mode, snr);
         }
-        if (wsjtxEnabled_ && wsjtxDecodes_) {
-            WsjtxMessage::DecodeFields decode;
-            decode.time = QTime::fromString(cmd["time"].toString(), "hh:mm:ss");
-            decode.snr = cmd["snr"].toInt();
-            decode.deltaTime = cmd["dt"].toDouble();
-            decode.deltaFrequency = cmd["df"].toInt();
-            decode.mode = cmd["mode"].toString();
-            decode.message = cmd["message"].toString();
-            wsjtxSendDatagram(WsjtxMessage::decode(wsjtxId_, decode));
-        }
+        if (wsjtxEnabled_ && wsjtxDecodes_) wsjtxSendDecode(cmd);
     }
     else {
         qWarning() << "Web: Unknown command:" << type;
@@ -3210,15 +3226,6 @@ void webServer::handleCommand(QWebSocket *client, const QJsonObject &cmd)
         err["message"] = QString("Unknown command: %1").arg(type);
         sendJsonTo(client, err);
     }
-}
-
-void webServer::handleQsoLogged(const QJsonObject &input)
-{
-    QJsonObject qso = normalizeQso(input);
-    if (qso.isEmpty()) return;
-    qsoLog_.prepend(qso);
-    if (!writeLogbook()) qsoLog_.removeFirst();
-    else { broadcastLogbook(); wsjtxSendQso(qso); }
 }
 
 QJsonObject webServer::buildInfoJson() const
@@ -3365,10 +3372,11 @@ void webServer::sendCurrentState(QWebSocket *client)
     info["wsjtxEnabled"] = wsjtxEnabled_;
     info["wsjtxTarget"] = wsjtxTarget_;
     info["wsjtxDecodes"] = wsjtxDecodes_;
-    info["logbookPath"] = logbookPath_;
+    info["logbookPath"] = logbook_.path();
+    info["logbookCount"] = logbook_.count();
     sendJsonTo(client, info);
-    QJsonArray entries; for (const QJsonObject &qso : std::as_const(qsoLog_)) entries.append(qso);
-    sendJsonTo(client, QJsonObject{{"type","logbook"},{"entries",entries}});
+    // The log itself is paged over REST; this only tells the browser to fetch page 1.
+    sendJsonTo(client, QJsonObject{{"type", "logbook"}, {"count", logbook_.count()}});
 
     // Send current status
     if (rigCaps) {
@@ -5787,128 +5795,115 @@ void webServer::configureLogbook(const QString &logbookOverride,
     std::unique_ptr<QSettings> settings(packetSettingsFile_.isEmpty()
         ? new QSettings()
         : new QSettings(packetSettingsFile_, QSettings::IniFormat));
-    QString configured = logbookOverride.isEmpty()
-        ? settings->value("Logbook").toString() : logbookOverride;
-    if (configured.isEmpty())
-        configured = QDir(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation))
-                         .filePath(QStringLiteral("logbook.adi"));
-    else if (QFileInfo(configured).isRelative() && !packetSettingsFile_.isEmpty())
-        configured = QFileInfo(packetSettingsFile_).dir().filePath(configured);
-    logbookPath_ = QDir::cleanPath(configured);
-    QDir().mkpath(QFileInfo(logbookPath_).absolutePath());
-    loadLogbook();
 
+    // --logbook wins over Logbook= in the settings file.  A relative path in
+    // a named profile resolves next to that profile, so contest.conf can
+    // carry its own contest.adi.
+    QString path = logbookOverride.isEmpty() ? settings->value("Logbook").toString()
+                                             : logbookOverride;
+    if (path.isEmpty())
+        path = QDir(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation))
+                   .filePath(QStringLiteral("logbook.adi"));
+    else if (QFileInfo(path).isRelative() && !packetSettingsFile_.isEmpty())
+        path = QFileInfo(packetSettingsFile_).dir().filePath(path);
+    path = QDir::cleanPath(path);
+
+    if (logbook_.open(path))
+        qInfo().noquote() << "Logbook:" << path << QString("(%1 QSOs)").arg(logbook_.count());
+    else
+        qWarning().noquote() << "Logbook: cannot open or create" << path << "- QSOs will not be saved";
+
+    // WSJT-X UDP: --wsjtx implies enable, --no-wsjtx wins (same rules as rigctld).
     wsjtxDecodes_ = wsjtxDecodes || settings->value("WSJTX/Decodes", false).toBool();
-    wsjtxForcedOff_=noWsjtx;
-    const QString target = wsjtxOverride.isEmpty()
-        ? settings->value("WSJTX/Target").toString() : wsjtxOverride;
-    wsjtxTarget_=target;
-    const bool enabled = !wsjtxOverride.isEmpty() || settings->value("WSJTX/Enabled", !target.isEmpty()).toBool();
-    if (!noWsjtx && enabled && !target.isEmpty()) configureWsjtxTarget(target);
+    wsjtxForcedOff_ = noWsjtx;
+    wsjtxTarget_ = wsjtxOverride.isEmpty() ? settings->value("WSJTX/Target").toString()
+                                           : wsjtxOverride;
+    const bool enabled = !wsjtxOverride.isEmpty() || settings->value("WSJTX/Enabled", false).toBool();
+    if (noWsjtx || !enabled || wsjtxTarget_.isEmpty())
+        qInfo() << "WSJT-X UDP: disabled";
+    else if (configureWsjtxTarget(wsjtxTarget_))
+        qInfo().noquote() << "WSJT-X UDP: sending to" << wsjtxAddress_.toString() + ':' + QString::number(wsjtxPort_)
+                          << "as" << wsjtxId_ << (wsjtxDecodes_ ? "(with decodes)" : "(QSOs only)");
+    else
+        qWarning() << "WSJT-X UDP: cannot resolve target" << wsjtxTarget_;
 }
 
-QJsonObject webServer::normalizeQso(const QJsonObject &input, const QString &existingId) const
+void webServer::wsjtxSaveSettings(bool enabled)
 {
-    const QString call = input.value("call").toString().trimmed().toUpper();
-    if (call.isEmpty() || call.size() > 32) return QJsonObject();
-    QJsonObject qso;
-    qso["id"] = existingId.isEmpty()
-        ? QUuid::createUuid().toString(QUuid::WithoutBraces) : existingId;
-    const auto copy = [&input, &qso](const char *key, int max) {
-        const QString value = input.value(QLatin1String(key)).toString().trimmed().left(max);
-        if (!value.isEmpty()) qso[QLatin1String(key)] = value;
-    };
-    copy("date", 8); copy("time", 6);
-    qso["call"] = call;
-    const qint64 freq = input.value("freq").toVariant().toLongLong();
-    if (freq >= 0) qso["freq"] = freq;
-    copy("band", 16); copy("mode", 16); copy("grid", 16); copy("theirGrid", 16);
-    copy("rstSent", 16); copy("rstRcvd", 16); copy("comment", 256); copy("name", 128);
-    if (input.contains("df")) qso["df"] = input.value("df").toInt();
-    return qso;
+    std::unique_ptr<QSettings> settings(packetSettingsFile_.isEmpty()
+        ? new QSettings()
+        : new QSettings(packetSettingsFile_, QSettings::IniFormat));
+    settings->setValue("WSJTX/Enabled", enabled);
+    settings->setValue("WSJTX/Target", wsjtxTarget_);
+    settings->setValue("WSJTX/Decodes", wsjtxDecodes_);
 }
 
-QByteArray webServer::qsoToAdif(const QJsonObject &qso) const
+// --- Logbook mutations: file, then WebSocket delta, then WSJT-X ---
+// Every browser applies the delta to whatever page it has loaded; nobody
+// ever receives the whole log.
+
+bool webServer::logbookAdd(QsoRecord &r)
 {
-    QByteArray out;
-    const auto field = [&out](const char *tag, const QString &value, const char *type = nullptr) {
-        if (value.isEmpty()) return;
-        const QByteArray bytes = value.toUtf8();
-        out += '<'; out += tag; out += ':'; out += QByteArray::number(bytes.size());
-        if (type) { out += ':'; out += type; }
-        out += '>'; out += bytes; out += ' ';
-    };
-    field("APP_WFWEB_ID", qso.value("id").toString());
-    field("CALL", qso.value("call").toString());
-    field("QSO_DATE", qso.value("date").toString());
-    field("TIME_ON", qso.value("time").toString());
-    if (qso.value("freq").toVariant().toLongLong() > 0)
-        field("FREQ", QString::number(qso.value("freq").toVariant().toLongLong() / 1e6, 'f', 6));
-    field("BAND", qso.value("band").toString()); field("MODE", qso.value("mode").toString());
-    field("RST_SENT", qso.value("rstSent").toString()); field("RST_RCVD", qso.value("rstRcvd").toString());
-    field("GRIDSQUARE", qso.value("theirGrid").toString()); field("MY_GRIDSQUARE", qso.value("grid").toString());
-    field("COMMENT", qso.value("comment").toString()); field("NAME", qso.value("name").toString());
-    out += "<EOR>\n";
-    return out;
+    if (!r.isValid() || !logbook_.add(r)) return false;
+    sendJsonToAll(QJsonObject{{"type", "qsoAdded"}, {"qso", r.toJson()}, {"count", logbook_.count()}});
+    wsjtxSendQso(r);
+    return true;
 }
 
-QByteArray webServer::adifDocumentForQso(const QJsonObject &qso) const
+bool webServer::logbookUpdate(const QString &id, const QsoRecord &r)
 {
-    QByteArray document = adifHeader();
-    document += qsoToAdif(qso);
-    return document;
+    if (!logbook_.update(id, r)) return false;
+    sendJsonToAll(QJsonObject{{"type", "qsoUpdated"}, {"qso", logbook_.find(id)->toJson()}});
+    return true;
 }
 
-void webServer::loadLogbook()
+bool webServer::logbookRemove(const QString &id)
 {
-    qsoLog_.clear();
-    QFile file(logbookPath_);
-    if (!file.exists()) { writeLogbook(); return; }
-    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) return;
-    const QString text = QString::fromUtf8(file.readAll());
-    const QRegularExpression recordRx(QStringLiteral("(.*?<EOR>)"), QRegularExpression::CaseInsensitiveOption | QRegularExpression::DotMatchesEverythingOption);
-    const QRegularExpression fieldRx(QStringLiteral("<([^:>]+):(\\d+)(?::[^>]*)?>([^<]*)"), QRegularExpression::CaseInsensitiveOption);
-    auto records = recordRx.globalMatch(text);
-    while (records.hasNext()) {
-        const QString record = records.next().captured(1);
-        QHash<QString, QString> f;
-        auto fields = fieldRx.globalMatch(record);
-        while (fields.hasNext()) { auto m = fields.next(); f[m.captured(1).toUpper()] = m.captured(3).left(m.captured(2).toInt()); }
-        if (f.value("CALL").isEmpty()) continue;
-        QJsonObject raw{{"call",f["CALL"]},{"date",f["QSO_DATE"]},{"time",f["TIME_ON"]},{"band",f["BAND"]},{"mode",f["MODE"]},{"rstSent",f["RST_SENT"]},{"rstRcvd",f["RST_RCVD"]},{"theirGrid",f["GRIDSQUARE"]},{"grid",f["MY_GRIDSQUARE"]},{"comment",f["COMMENT"]},{"name",f["NAME"]}};
-        raw["freq"] = qRound64(f.value("FREQ").toDouble() * 1e6);
-        qsoLog_.append(normalizeQso(raw, f.value("APP_WFWEB_ID")));
-    }
-    std::reverse(qsoLog_.begin(), qsoLog_.end());
+    if (!logbook_.remove(id)) return false;
+    sendJsonToAll(QJsonObject{{"type", "qsoDeleted"}, {"id", id}, {"count", logbook_.count()}});
+    return true;
 }
 
-bool webServer::writeLogbook() const
+// Whole-log change (clear, merge, import): browsers reload their first page.
+void webServer::logbookReset()
 {
-    QSaveFile file(logbookPath_);
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) return false;
-    file.write(adifHeader());
-    for (auto it = qsoLog_.crbegin(); it != qsoLog_.crend(); ++it) file.write(qsoToAdif(*it));
-    return file.commit();
+    sendJsonToAll(QJsonObject{{"type", "logbook"}, {"count", logbook_.count()}});
 }
 
-void webServer::broadcastLogbook()
-{
-    QJsonArray entries; for (const QJsonObject &qso : std::as_const(qsoLog_)) entries.append(qso);
-    QJsonObject event{{"type","logbook"},{"entries",entries}};
-    sendJsonToAll(event);
-}
+// --- WSJT-X UDP emitter ---
 
 bool webServer::configureWsjtxTarget(const QString &target)
 {
-    QString host = target.trimmed(); quint16 port = 2237;
+    QString host = target.trimmed();
+    quint16 port = 2237;
     const int colon = host.lastIndexOf(':');
-    if (colon > 0 && !host.mid(colon + 1).contains(':')) { bool ok=false; int p=host.mid(colon+1).toInt(&ok); if (ok && p>0 && p<65536) { port=p; host=host.left(colon); } }
+    // host:port — but leave a bare IPv6 literal alone
+    if (colon > 0 && !host.mid(colon + 1).contains(':')) {
+        bool ok = false;
+        const int p = host.mid(colon + 1).toInt(&ok);
+        if (ok && p > 0 && p < 65536) {
+            port = quint16(p);
+            host = host.left(colon);
+        }
+    }
     QHostAddress address;
-    if (!address.setAddress(host)) { const auto found=QHostInfo::fromName(host).addresses(); if (found.isEmpty()) return false; address=found.first(); }
-    wsjtxAddress_=address; wsjtxPort_=port; wsjtxEnabled_=true;
-    if (!wsjtxSocket_) wsjtxSocket_=new QUdpSocket(this);
-    if (!wsjtxHeartbeatTimer_) { wsjtxHeartbeatTimer_=new QTimer(this); connect(wsjtxHeartbeatTimer_, &QTimer::timeout, this, &webServer::wsjtxSendHeartbeat); }
-    wsjtxHeartbeatTimer_->start(15000); wsjtxSendHeartbeat(); return true;
+    if (!address.setAddress(host)) {
+        const auto found = QHostInfo::fromName(host).addresses();
+        if (found.isEmpty()) return false;
+        address = found.first();
+    }
+    wsjtxAddress_ = address;
+    wsjtxPort_ = port;
+    wsjtxEnabled_ = true;
+    if (!wsjtxSocket_) wsjtxSocket_ = new QUdpSocket(this);
+    if (!wsjtxHeartbeatTimer_) {
+        wsjtxHeartbeatTimer_ = new QTimer(this);
+        connect(wsjtxHeartbeatTimer_, &QTimer::timeout, this, &webServer::wsjtxSendHeartbeat);
+    }
+    // Listeners (JTAlert, GridTracker) drop a client whose heartbeats stop.
+    wsjtxHeartbeatTimer_->start(15000);
+    wsjtxSendHeartbeat();
+    return true;
 }
 
 void webServer::wsjtxSendDatagram(const QByteArray &packet)
@@ -5916,12 +5911,14 @@ void webServer::wsjtxSendDatagram(const QByteArray &packet)
     if (!wsjtxEnabled_ || !wsjtxSocket_) return;
     wsjtxSocket_->writeDatagram(packet, wsjtxAddress_, wsjtxPort_);
 }
+
 void webServer::wsjtxSendHeartbeat()
 {
-    wsjtxSendDatagram(WsjtxMessage::heartbeat(
-        wsjtxId_, WsjtxMessage::Schema, QString(WFWEB_VERSION), QString()));
+    wsjtxSendDatagram(WsjtxMessage::heartbeat(wsjtxId_, WsjtxMessage::Schema,
+                                              QString(WFWEB_VERSION), QString()));
     wsjtxSendStatus();
 }
+
 void webServer::wsjtxSendStatus()
 {
     WsjtxMessage::StatusFields status;
@@ -5939,38 +5936,66 @@ void webServer::wsjtxSendStatus()
     status.deGrid = reporterGrid;
     wsjtxSendDatagram(WsjtxMessage::status(wsjtxId_, status));
 }
+
 void webServer::wsjtxSendClose()
 {
     if (wsjtxEnabled_) wsjtxSendDatagram(WsjtxMessage::close(wsjtxId_));
 }
-void webServer::wsjtxSendQso(const QJsonObject &q)
+
+void webServer::wsjtxSendQso(const QsoRecord &q)
 {
+    if (!wsjtxEnabled_) return;
     wsjtxSendStatus();
-    const QDate date = QDate::fromString(q.value("date").toString(), "yyyyMMdd");
-    const QTime time = QTime::fromString(q.value("time").toString(), "hhmmss");
-    const QDateTime timestamp(date, time, Qt::UTC);
-    WsjtxMessage::QsoFields fields;
-    fields.dateOff = timestamp;
-    fields.dxCall = q.value("call").toString();
-    fields.dxGrid = q.value("theirGrid").toString();
-    fields.txFrequency = q.value("freq").toVariant().toULongLong();
-    fields.mode = q.value("mode").toString();
-    fields.reportSent = q.value("rstSent").toString();
-    fields.reportReceived = q.value("rstRcvd").toString();
-    fields.comments = q.value("comment").toString();
-    fields.name = q.value("name").toString();
-    fields.dateOn = timestamp;
-    fields.myCall = reporterCallsign;
-    fields.myGrid = q.value("grid").toString().isEmpty()
-        ? reporterGrid : q.value("grid").toString();
-    wsjtxSendDatagram(WsjtxMessage::qsoLogged(wsjtxId_, fields));
-    wsjtxSendDatagram(WsjtxMessage::loggedAdif(
-        wsjtxId_, adifDocumentForQso(q).trimmed()));
+    QDateTime when(QDate::fromString(q.date, "yyyyMMdd"), QTime::fromString(q.time, "hhmmss"), Qt::UTC);
+    if (!when.isValid()) when = QDateTime::currentDateTimeUtc();
+
+    WsjtxMessage::QsoFields f;
+    f.dateOff = when;
+    f.dateOn = when;
+    f.dxCall = q.call;
+    f.dxGrid = q.theirGrid;
+    f.txFrequency = quint64(q.freq);
+    f.mode = q.mode;
+    f.reportSent = q.rstSent;
+    f.reportReceived = q.rstRcvd;
+    f.comments = q.comment;
+    f.name = q.name;
+    f.myCall = reporterCallsign;
+    f.myGrid = q.grid.isEmpty() ? reporterGrid : q.grid;
+    // Both messages, exactly as WSJT-X does: loggers pick whichever they parse.
+    wsjtxSendDatagram(WsjtxMessage::qsoLogged(wsjtxId_, f));
+    wsjtxSendDatagram(WsjtxMessage::loggedAdif(wsjtxId_, (Logbook::adifHeader() + q.toAdif()).trimmed()));
+}
+
+void webServer::wsjtxSendDecode(const QJsonObject &cmd)
+{
+    // Two browsers decoding the same audio report the same decode; forward
+    // each distinct (slot time, offset, text) once within 30 s.
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    const QString key = cmd["time"].toString() + '|' + QString::number(cmd["df"].toInt())
+                      + '|' + cmd["message"].toString();
+    for (auto it = wsjtxDecodesSent_.begin(); it != wsjtxDecodesSent_.end();) {
+        if (now - it.value() > 30000) it = wsjtxDecodesSent_.erase(it);
+        else ++it;
+    }
+    if (wsjtxDecodesSent_.contains(key)) return;
+    wsjtxDecodesSent_.insert(key, now);
+
+    WsjtxMessage::DecodeFields d;
+    d.time = QTime::fromString(cmd["time"].toString(), "hh:mm:ss");
+    d.snr = cmd["snr"].toInt();
+    d.deltaTime = cmd["dt"].toDouble();
+    d.deltaFrequency = quint32(qMax(0, cmd["df"].toInt()));
+    d.mode = cmd["mode"].toString();
+    d.message = cmd["message"].toString();
+    wsjtxSendDatagram(WsjtxMessage::decode(wsjtxId_, d));
 }
 
 void webServer::setInstanceName(const QString &name)
 {
     instanceName_ = name;
+    // Same convention as WSJT-X's "--rig-name": listeners show the tag.
+    wsjtxId_ = name.isEmpty() ? QStringLiteral("wfweb") : QStringLiteral("wfweb - ") + name;
 }
 
 static QSettings *packetSettingsFor(const QString &file)

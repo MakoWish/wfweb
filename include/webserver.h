@@ -18,6 +18,8 @@
 #include <QSslKey>
 #include <QSslCertificate>
 #include <QUdpSocket>
+#include <QUrlQuery>
+#include "logbook.h"
 
 #if (QT_VERSION < QT_VERSION_CHECK(6,0,0))
 #include <QAudioDeviceInfo>
@@ -186,7 +188,8 @@ private:
     void sendHttpResponse(QTcpSocket *socket, int statusCode, const QString &statusText,
                          const QByteArray &contentType, const QByteArray &body);
     void handleRestRequest(QTcpSocket *socket, const QString &method,
-                           const QString &path, const QByteArray &body);
+                           const QString &path, const QUrlQuery &query,
+                           const QByteArray &body);
     void sendRestResponse(QTcpSocket *socket, int statusCode, const QJsonObject &json);
     QJsonObject buildInfoJson() const;
     void sendJsonToAll(const QJsonObject &obj);
@@ -208,19 +211,20 @@ private:
     // both, which is the structural unification of TX audio plumbing.
     void txWritePcmFrame(const QByteArray &pcmMonoLE, bool applyGain);
     void handleCommand(QWebSocket *client, const QJsonObject &cmd);
-    void handleQsoLogged(const QJsonObject &qso);
-    void loadLogbook();
-    bool writeLogbook() const;
-    QJsonObject normalizeQso(const QJsonObject &input, const QString &id = QString()) const;
-    QByteArray qsoToAdif(const QJsonObject &qso) const;
-    QByteArray adifDocumentForQso(const QJsonObject &qso) const;
-    void broadcastLogbook();
+    // Station logbook (see logbook.h).  These wrap the Logbook mutations
+    // with the WebSocket delta events and the WSJT-X emission.
+    bool logbookAdd(QsoRecord &r);
+    bool logbookUpdate(const QString &id, const QsoRecord &r);
+    bool logbookRemove(const QString &id);
+    void logbookReset();
     void wsjtxSendHeartbeat();
     void wsjtxSendStatus();
-    void wsjtxSendQso(const QJsonObject &qso);
+    void wsjtxSendQso(const QsoRecord &qso);
+    void wsjtxSendDecode(const QJsonObject &cmd);
     void wsjtxSendClose();
     void wsjtxSendDatagram(const QByteArray &packet);
     bool configureWsjtxTarget(const QString &target);
+    void wsjtxSaveSettings(bool enabled);
     void requestVfoUpdate();
     void disableFreeDV();
     bool isFreeDVCompatibleMode(rigMode_t mk) const;
@@ -523,8 +527,7 @@ private:
     // resolves the -s flag.  Empty means "use the default (QSettings org/app)".
     QString packetSettingsFile_;
     QString instanceName_;
-    QString logbookPath_;
-    QList<QJsonObject> qsoLog_;
+    Logbook logbook_;
     QUdpSocket *wsjtxSocket_ = nullptr;
     QHostAddress wsjtxAddress_;
     quint16 wsjtxPort_ = 2237;
@@ -534,6 +537,9 @@ private:
     QTimer *wsjtxHeartbeatTimer_ = nullptr;
     QString wsjtxId_ = QStringLiteral("wfweb");
     QString wsjtxTarget_;
+    // Two browsers decoding the same audio would forward the same decode
+    // twice; remember what went out recently, keyed on time+df+text.
+    QHash<QString, qint64> wsjtxDecodesSent_;
     void    packetLoadSettings();
     void    packetSaveSettings();
 

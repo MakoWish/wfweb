@@ -1,4 +1,8 @@
-"""Build and run the protocol-aware WSJT-X NetworkMessage unit test."""
+"""Build and run the self-contained C++ unit tests (no rig, no server).
+
+Each entry is a test program under tests/ plus the sources it needs.  They
+link only against Qt5Core, so a plain g++ + pkg-config is enough.
+"""
 
 import shutil
 import subprocess
@@ -9,8 +13,17 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 
+UNITS = {
+    # WSJT-X NetworkMessage serialization, checked by deserializing with Qt's
+    # own schema-3 representation.
+    "wsjtx_protocol": ["src/wsjtxmessage.cpp"],
+    # ADIF parse/append/rewrite, chronological index, paging, merge.
+    "logbook": ["src/logbook.cpp"],
+}
 
-def test_wsjtx_network_message_serialization(tmp_path):
+
+@pytest.mark.parametrize("unit", sorted(UNITS))
+def test_cpp_unit(unit, tmp_path):
     if not shutil.which("g++") or not shutil.which("pkg-config"):
         pytest.skip("C++ compiler/pkg-config unavailable")
     flags = subprocess.run(
@@ -22,12 +35,12 @@ def test_wsjtx_network_message_serialization(tmp_path):
     if flags.returncode:
         pytest.skip("Qt5Core development package unavailable")
 
-    executable = tmp_path / "wsjtx_protocol_test"
+    executable = tmp_path / f"{unit}_test"
     command = [
         "g++", "-std=c++17", "-fPIC",
         "-I", str(ROOT / "include"),
-        str(ROOT / "tests" / "wsjtx_protocol_test.cpp"),
-        str(ROOT / "src" / "wsjtxmessage.cpp"),
+        str(ROOT / "tests" / f"{unit}_test.cpp"),
+        *(str(ROOT / src) for src in UNITS[unit]),
         *flags.stdout.split(),
         "-o", str(executable),
     ]
