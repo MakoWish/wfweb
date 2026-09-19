@@ -21,16 +21,21 @@ def _qso(call, date, time, **extra):
     return q
 
 
-LOGBOOK_DIR = Path("/tmp/wfweb-test/.local/share/wfweb/wfweb")   # HOME of the wfweb_instance fixture
+def _logbook_dir(rest_url):
+    """The server tells us where the file is (the data directory differs per
+    platform: XDG on Linux, ~/Library/Application Support on macOS)."""
+    info = requests.get(rest_url + "/info", timeout=5).json()
+    return Path(info.get("info", info)["logbookPath"]).parent
 
 
-def _clear(base):
+def _clear(base, rest_url=None):
     had = requests.get(base, timeout=5).json()["total"]
-    before = set(LOGBOOK_DIR.glob("logbook.adi.*.bak"))
+    logbook_dir = _logbook_dir(rest_url or base.replace("/logbook", "/radio"))
+    before = set(logbook_dir.glob("logbook.adi.*.bak"))
     r = requests.delete(base, timeout=5)
     assert r.status_code == 202
     assert requests.get(base, timeout=5).json()["total"] == 0
-    new_baks = set(LOGBOOK_DIR.glob("logbook.adi.*.bak")) - before
+    new_baks = set(logbook_dir.glob("logbook.adi.*.bak")) - before
     if had:
         # clearing never discards data: the previous file is kept as a .bak
         assert len(new_baks) == 1, new_baks

@@ -3284,6 +3284,10 @@ void webServer::handleCommand(QWebSocket *client, const QJsonObject &cmd)
 QJsonObject webServer::buildInfoJson() const
 {
     QJsonObject info;
+    // Where the station log lives, so scripts (and the test suite on any
+    // platform) can find the file without guessing the data directory.
+    info["logbookPath"] = logbook_.path();
+    info["logbookPersistent"] = logbookPersistent_;
     info["version"] = QString(WFWEB_VERSION);
     // Instance tag from --name; empty means "show the rig model".
     info["name"] = instanceName_;

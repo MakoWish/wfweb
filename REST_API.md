@@ -170,6 +170,8 @@ curl -s http://localhost:8081/api/v1/radio | jq .
     "model": "IC-7300",
     "name": "",
     "version": "0.2.4",
+    "logbookPath": "/home/alain/.local/share/wfweb/wfweb/logbook.adi",
+    "logbookPersistent": true,
     "hasTransmit": true,
     "hasSpectrum": true,
     "modes": ["LSB", "USB", "AM", "FM", "CW", "CW-R", "RTTY", "RTTY-R"],
