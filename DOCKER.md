@@ -185,17 +185,24 @@ The REST port is always web port + 1.
 
 ## Persistent Configuration
 
-The container stores settings in `/root/.config/wfview/wfweb.conf`. To persist
-configuration across container restarts, mount a volume:
+The image points Qt's configuration and data roots at a single `/data`
+directory, so one volume persists everything: the settings file
+(`/data/wfweb/wfweb.conf`), the TLS certificate and the ADIF logbook (both
+under `/data/wfweb/wfweb/`).
 
 ```bash
 docker run --rm -it \
-  -v wfview-config:/root/.config/wfview \
+  -v wfweb-data:/data \
   --device /dev/ttyUSB0 \
   --device /dev/snd --group-add audio \
   -p 8080:8080 -p 8081:8081 \
   k1fm/wfweb
 ```
+
+> **Upgrading from an image before the logbook:** settings used to live at
+> `/root/.config/wfweb/wfweb.conf`. If you had a volume mounted there, copy
+> the file to `/data/wfweb/wfweb.conf` in the new volume (or simply re-enter
+> your settings in the web UI once).
 
 You can also supply a pre-made settings file:
 
@@ -230,9 +237,8 @@ and `--manufacturer <id>` directly.
 > automatically from its install's `rigs/` directory based on the radio
 > it detects on the bus.
 
-The image sets both Qt configuration and application data roots to `/data`.
-Mount that single volume to persist settings, TLS certificate, and the ADIF
-logbook together, for example `-v wfweb-data:/data`. The TLS certificate is stored there as well.
+To supply your own TLS certificate, place `wfweb-web.crt` and `wfweb-web.key`
+under `/data/wfweb/wfweb/` in the volume.
 
 ---
 
@@ -262,7 +268,7 @@ Server:
   --rigctld-port <port>   Enable Hamlib rigctld TCP server (default off)
   --rigctld-bind-all      Bind rigctld to all interfaces (default localhost)
   --no-rigctld            Disable rigctld even if enabled in settings
-  --logbook <file>        ADIF logbook path (default under /data)
+  --logbook <file>        ADIF logbook path (default /data/wfweb/wfweb/logbook.adi)
   --wsjtx <host[:port]>   Emit WSJT-X UDP messages (default port 2237)
   --no-wsjtx              Disable configured WSJT-X UDP output
   --wsjtx-decodes         Also emit FT8/FT4 Decode messages
@@ -311,11 +317,11 @@ services:
     group_add:
       - audio
     volumes:
-      - wfview-config:/root/.config/wfview
+      - wfweb-data:/data
     command: ["--serial-port", "/dev/ttyUSB0"]
 
 volumes:
-  wfview-config:
+  wfweb-data:
 ```
 
 For LAN mode:
@@ -329,7 +335,7 @@ services:
       - "8080:8080"
       - "8081:8081"
     volumes:
-      - wfview-config:/root/.config/wfview
+      - wfweb-data:/data
     command:
       - "--lan"
       - "192.168.1.100"
@@ -339,7 +345,7 @@ services:
       - "secret"
 
 volumes:
-  wfview-config:
+  wfweb-data:
 ```
 
 ---

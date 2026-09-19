@@ -63,27 +63,69 @@ All responses are JSON objects.
 
 ### Server logbook
 
-The server is the source of truth for the station logbook. It stores standard
-ADIF in `<data directory>/logbook.adi` by default; set `Logbook=` in the
-settings file or pass `--logbook <file>` to choose another path. Relative
-paths in named profiles are resolved next to that profile. On its first
-connection, an older browser-local log is merged into the server log once.
-Every mutation is broadcast to all browsers.
+The server is the source of truth for the station logbook. It is a plain ADIF
+file, `<data directory>/logbook.adi` by default; set `Logbook=` in the
+settings file or pass `--logbook <file>` to choose another path (a relative
+path in a named profile resolves next to that profile). Adds append one
+record; edits and deletes rewrite the file atomically. On its first
+connection a browser that still holds the old browser-local log merges it
+into the server log once.
+
+The log is never returned whole. `GET` pages newest-first with a cursor so a
+lifetime log stays cheap for the browser and the server alike.
 
 | Method | Endpoint | Action |
 |---|---|---|
-| `GET` | `/api/v1/logbook` | List entries as `{ "entries": [...] }` |
+| `GET` | `/api/v1/logbook?limit=100&before=<cursor>&call=<CALL>` | Page of entries, newest first |
 | `POST` | `/api/v1/logbook` | Add an entry from a JSON QSO object |
-| `PUT` | `/api/v1/logbook/{id}` | Replace an entry |
+| `DELETE` | `/api/v1/logbook` | Clear the whole log |
+| `PUT` | `/api/v1/logbook/{id}` | Replace an entry (the id is kept) |
 | `DELETE` | `/api/v1/logbook/{id}` | Delete an entry |
-| `GET` | `/api/v1/logbook/adif` | Download the complete ADIF logbook |
+| `GET` | `/api/v1/logbook/adif` | Download the complete ADIF file |
+| `POST` | `/api/v1/logbook/adif` | Import an ADIF document (body = the file); duplicates are skipped |
+
+`GET /api/v1/logbook` returns `{ "entries": [...], "total": N, "next": "<cursor>" }`.
+`limit` defaults to 100 (max 1000). Pass the returned `next` as `before` to
+fetch the following, older page; it is absent on the last page. `call`
+restricts the page to one callsign (case-insensitive), which is how a
+"worked before" lookup is done against a large log. `total` is always the
+size of the whole log.
+
+A QSO object carries `date` (YYYYMMDD), `time` (HHMMSS), `call`, `freq` (Hz),
+`band`, `mode`, `grid` (own), `theirGrid`, `rstSent`, `rstRcvd`, and
+optionally `comment`, `name`, `df`. Only `call` is required.
+
+Every change made through REST or the web UI is broadcast to all connected
+browsers as a delta:
+
+```json
+{"type":"qsoAdded","qso":{...},"count":N}
+{"type":"qsoUpdated","qso":{...}}
+{"type":"qsoDeleted","id":"...","count":N}
+{"type":"logbook","count":N}          // whole-log change (clear, merge, import): reload page 1
+```
+
+Browsers log through the WebSocket with `qsoLogged {qso}`, `updateQso {id,qso}`,
+`deleteQso {id}`, `clearLogbook {}` and `mergeLogbook {entries}`; the server
+applies the same validation and emits the same deltas.
+
+### WSJT-X UDP
 
 Completed contacts can also be emitted using the standard WSJT-X UDP
-protocol (Heartbeat, QSO Logged and Logged ADIF; optional Decode; Close at
-shutdown). Configure `--wsjtx <host[:port]>`, `--no-wsjtx`, and
-`--wsjtx-decodes`, or the matching Station Settings controls. UDP output is
-off by default. A multicast destination is supported. In Docker, use the
-host's LAN address for unicast; multicast generally requires host networking.
+protocol, so GridTracker, JTAlert, Log4OM, CQRLOG, N1MM and similar consume
+them without any wfweb-specific code. The server sends Heartbeat (every 15 s),
+Status, QSO Logged and Logged ADIF (both, as WSJT-X does), optionally Decode,
+and Close at shutdown. QSO messages fire from the server-side commit, so a
+manual SSB or CW entry goes out the same way an FT8 contact does.
+
+Configure with `--wsjtx <host[:port]>` (default port 2237, implies enable),
+`--no-wsjtx` (wins over the settings file) and `--wsjtx-decodes`, or with the
+matching Station Settings controls in the web UI (`setWsjtx
+{enabled,target,decodes}` over the WebSocket). Off by default. The target may
+be a multicast group such as `239.255.0.0:2237`, which is what you need when
+more than one listener runs on the same machine. The client id is `wfweb`,
+or `wfweb - <name>` when `-n` is set. In Docker, use the host's LAN address
+for unicast; multicast generally requires host networking.
 
 ### GET /api/v1/radio
 

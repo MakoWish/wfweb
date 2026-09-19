@@ -250,7 +250,7 @@ All settings can be passed as CLI flags. Run `wfweb --help` for the full list.
 
 | Flag | Description | Default |
 |---|---|---|
-| `-s --settings <file>` | Settings .ini file | `~/.config/wfview/wfweb.conf` |
+| `-s --settings <file>` | Settings .ini file | `~/.config/wfweb/wfweb.conf` |
 | `-p --port <port>` | Web server HTTPS port | `8080` |
 | `-S --no-web` | Disable web server, enable rig server | web server enabled |
 | `--lan <ip>` | Connect via LAN/UDP (enables LAN mode) | USB serial |
