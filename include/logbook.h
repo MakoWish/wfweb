@@ -32,6 +32,9 @@ struct QsoRecord {
     QByteArray toAdif() const;   // one <...> record terminated by <EOR>\n
     // Whitelists and length-caps untrusted input; empty call => invalid record.
     static QsoRecord fromJson(const QJsonObject &in, const QString &id = QString());
+    // Trim / upper-case / cap every field and mint an id; the single
+    // normalisation path for JSON input and ADIF parsing alike.
+    QsoRecord normalized() const;
 };
 
 // The station logbook: a plain ADIF file on disk plus a chronological

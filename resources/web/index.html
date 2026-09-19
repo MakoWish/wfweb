@@ -2491,6 +2491,7 @@ body.digi-open #bottomBar { grid-row: 5; }
                     <span></span>
                 </div>
                 <div id="digiLogRows"></div>
+                <div id="digiLogMore" class="digi-log-more" style="display:none"></div>
             </div>
             <div class="digi-log-actions">
                 <button id="digiAddQsoBtn" class="digi-log-action-btn">&#10010; Add QSO</button>
@@ -3352,18 +3353,21 @@ function handleMessage(msg) {
             loadLogbookPage(true);
             migrateBrowserLog();
             break;
-        case 'qsoAdded':
+        case 'qsoAdded': {
             if (msg.count !== undefined) logbookTotal = msg.count;
-            insertQsoSorted(msg.qso);
-            renderDigiLog();
+            var ai = insertQsoSorted(msg.qso);
+            if (ai >= 0) insertDigiLogRow(ai); else updateDigiLogFooter();
             break;
+        }
         case 'qsoUpdated': {
             var ui = findQsoIdx(msg.qso && msg.qso.id);
             if (ui >= 0) {
                 if (digiLogEditIdx === ui) digiLogEditIdx = -1;
+                else if (digiLogEditIdx > ui) digiLogEditIdx--;
                 qsoLog.splice(ui, 1);
-                insertQsoSorted(msg.qso);
-                renderDigiLog();
+                removeDigiLogRow(ui);
+                var ni = insertQsoSorted(msg.qso);
+                if (ni >= 0) insertDigiLogRow(ni);
             }
             break;
         }
@@ -3374,7 +3378,9 @@ function handleMessage(msg) {
                 if (digiLogEditIdx === di) digiLogEditIdx = -1;
                 else if (digiLogEditIdx > di) digiLogEditIdx--;
                 qsoLog.splice(di, 1);
-                renderDigiLog();
+                removeDigiLogRow(di);
+            } else {
+                updateDigiLogFooter();
             }
             break;
         }
@@ -10214,7 +10220,7 @@ function commitQsoLogEntry(entry, draftIdx) {
     if (draftIdx !== undefined && draftIdx >= 0) {
         qsoLog.splice(draftIdx, 1);
         digiLogEditIdx = -1;
-        renderDigiLog();
+        removeDigiLogRow(draftIdx);
     }
     send({ cmd: 'qsoLogged', qso: entry });
     return entry;
@@ -10231,17 +10237,19 @@ function findQsoIdx(id) {
 // Insert a server entry at its chronological place in the loaded pages.
 // Anything older than the oldest loaded entry belongs to a page not yet
 // fetched, so it is left for the paging to bring in.
+// Returns the index it was inserted at, or -1.
 function insertQsoSorted(q) {
-    if (!q || !q.id || findQsoIdx(q.id) >= 0) return;
+    if (!q || !q.id || findQsoIdx(q.id) >= 0) return -1;
     var start = 0;
     // an in-progress draft row (no id) stays on top
     while (start < qsoLog.length && !qsoLog[start].id) start++;
     var key = qsoSortKey(q);
     var i = start;
     while (i < qsoLog.length && qsoSortKey(qsoLog[i]) > key) i++;
-    if (i === qsoLog.length && logbookNext) return;   // older than what is loaded
+    if (i === qsoLog.length && logbookNext) return -1;   // older than what is loaded
     qsoLog.splice(i, 0, q);
     if (digiLogEditIdx >= i) digiLogEditIdx++;
+    return i;
 }
 
 // Fetch a page of the server logbook: the newest page (reset) or the next
@@ -10261,12 +10269,16 @@ function loadLogbookPage(reset) {
             qsoLog = entries;
             if (draft) { qsoLog.unshift(draft); digiLogEditIdx = 0; }
             else digiLogEditIdx = -1;
+            logbookTotal = j.total || 0;
+            logbookNext = j.next || '';
+            renderDigiLog();
         } else {
+            var from = qsoLog.length;
             qsoLog = qsoLog.concat(entries);
+            logbookTotal = j.total || 0;
+            logbookNext = j.next || '';
+            appendDigiLogRows(from);
         }
-        logbookTotal = j.total || 0;
-        logbookNext = j.next || '';
-        renderDigiLog();
     }).catch(function(e) {
         console.warn('Logbook page load failed', e);
     }).finally(function() { logbookLoading = false; });
@@ -10404,78 +10416,145 @@ function openLogModal() {
     document.getElementById('digiLogModal').classList.add('visible');
 }
 
+// One log row.  Row actions resolve their index from the element's position
+// at click time (digiLogRowIdx), so rows can be inserted or removed
+// individually without renumbering every other row.
+function digiLogRowHtml(q, editing) {
+    var dateDisp = q.date ? q.date.substr(0,4)+'-'+q.date.substr(4,2)+'-'+q.date.substr(6,2) : '';
+    var timeDisp = q.time ? q.time.substr(0,2)+':'+q.time.substr(2,2) : (q.time || '');
+    var freqDisp = q.freq ? (q.freq / 1e6).toFixed(3) : '';
+    if (editing) {
+        return '<div class="digi-log-row">' +
+            '<input class="digi-log-input" id="dleDate" value="' + escapeHtml(dateDisp) + '">' +
+            '<input class="digi-log-input" id="dleTime" value="' + escapeHtml(timeDisp) + '">' +
+            '<input class="digi-log-input" id="dleCall" value="' + escapeHtml(q.call || '') + '">' +
+            '<input class="digi-log-input" id="dleFreq" value="' + escapeHtml(freqDisp) + '">' +
+            '<input class="digi-log-input" id="dleBand" value="' + escapeHtml(q.band || '') + '">' +
+            '<input class="digi-log-input" id="dleMode" value="' + escapeHtml(q.mode || '') + '">' +
+            '<input class="digi-log-input" id="dleRstSent" value="' + escapeHtml(q.rstSent || '') + '">' +
+            '<input class="digi-log-input" id="dleRstRcvd" value="' + escapeHtml(q.rstRcvd || '') + '">' +
+            '<span class="digi-log-save" title="Save" onclick="saveDigiQso(digiLogRowIdx(this))">&#x2713;</span>' +
+            '<span class="digi-log-del" title="Cancel" onclick="cancelEditDigiQso()">&#x2715;</span>' +
+            '</div>';
+    }
+    var rstSentDisp = q.rstSent !== undefined ? q.rstSent : (q.snr !== undefined ? ((q.snr>=0?'+':'')+Math.round(q.snr)) : '');
+    return '<div class="digi-log-row">' +
+        '<span class="digi-log-date">' + escapeHtml(dateDisp) + '</span>' +
+        '<span class="digi-log-time">' + escapeHtml(timeDisp) + '</span>' +
+        '<span class="digi-log-call">' + escapeHtml(q.call || '') + '</span>' +
+        '<span class="digi-log-freq">' + escapeHtml(freqDisp) + '</span>' +
+        '<span class="digi-log-band">' + escapeHtml(q.band || '') + '</span>' +
+        '<span class="digi-log-mode">' + escapeHtml(q.mode || '') + '</span>' +
+        '<span class="digi-log-rstsent">' + escapeHtml(rstSentDisp) + '</span>' +
+        '<span class="digi-log-rstrcvd">' + escapeHtml(q.rstRcvd || '') + '</span>' +
+        '<span class="digi-log-edit" title="Edit" onclick="editDigiQso(digiLogRowIdx(this))">&#x270E;</span>' +
+        '<span class="digi-log-del" title="Delete" onclick="deleteDigiQso(digiLogRowIdx(this))">&#x2715;</span>' +
+        '</div>';
+}
+
+function digiLogRowIdx(el) {
+    var row = el.closest('.digi-log-row');
+    return row ? Array.prototype.indexOf.call(row.parentNode.children, row) : -1;
+}
+
+function digiLogRowEl(i) {
+    var panel = document.getElementById('digiLogRows');
+    var el = panel && panel.children[i];
+    return (el && el.classList.contains('digi-log-row')) ? el : null;
+}
+
+function updateDigiLogFooter() {
+    var countEl = document.getElementById('digiLogCount');
+    if (countEl) countEl.textContent = logbookTotal ? '(' + logbookTotal + ')' : '';
+    var more = document.getElementById('digiLogMore');
+    if (!more) return;
+    if (logbookNext) {
+        more.innerHTML = qsoLog.length + ' of ' + logbookTotal + ' shown ' +
+            '<button class="digi-log-action-btn" onclick="loadLogbookPage(false)">Load older</button>';
+        more.style.display = '';
+    } else {
+        more.innerHTML = '';
+        more.style.display = 'none';
+    }
+}
+
+// Full rebuild: first page, reset, or when the incremental path can't apply.
 function renderDigiLog() {
     var panel = document.getElementById('digiLogRows');
     if (!panel) return;
-    var countEl = document.getElementById('digiLogCount');
-    if (countEl) countEl.textContent = logbookTotal ? '(' + logbookTotal + ')' : '';
+    updateDigiLogFooter();
     if (!qsoLog.length) {
         panel.innerHTML = '<div class="digi-log-empty">No QSOs logged yet.</div>';
         return;
     }
     var html = '';
-    for (var i = 0; i < qsoLog.length; i++) {
-        var q = qsoLog[i];
-        var dateDisp = q.date ? q.date.substr(0,4)+'-'+q.date.substr(4,2)+'-'+q.date.substr(6,2) : '';
-        var timeDisp = q.time ? q.time.substr(0,2)+':'+q.time.substr(2,2) : (q.time || '');
-        var freqDisp = q.freq ? (q.freq / 1e6).toFixed(3) : '';
-        if (i === digiLogEditIdx) {
-            // Editable row
-            html += '<div class="digi-log-row">' +
-                '<input class="digi-log-input" id="dleDate" value="' + escapeHtml(dateDisp) + '">' +
-                '<input class="digi-log-input" id="dleTime" value="' + escapeHtml(timeDisp) + '">' +
-                '<input class="digi-log-input" id="dleCall" value="' + escapeHtml(q.call || '') + '">' +
-                '<input class="digi-log-input" id="dleFreq" value="' + escapeHtml(freqDisp) + '">' +
-                '<input class="digi-log-input" id="dleBand" value="' + escapeHtml(q.band || '') + '">' +
-                '<input class="digi-log-input" id="dleMode" value="' + escapeHtml(q.mode || '') + '">' +
-                '<input class="digi-log-input" id="dleRstSent" value="' + escapeHtml(q.rstSent || '') + '">' +
-                '<input class="digi-log-input" id="dleRstRcvd" value="' + escapeHtml(q.rstRcvd || '') + '">' +
-                '<span class="digi-log-save" title="Save" onclick="saveDigiQso(' + i + ')">&#x2713;</span>' +
-                '<span class="digi-log-del" title="Cancel" onclick="cancelEditDigiQso()">&#x2715;</span>' +
-                '</div>';
-        } else {
-            var rstSentDisp = q.rstSent !== undefined ? q.rstSent : (q.snr !== undefined ? ((q.snr>=0?'+':'')+Math.round(q.snr)) : '');
-            html += '<div class="digi-log-row">' +
-                '<span class="digi-log-date">' + escapeHtml(dateDisp) + '</span>' +
-                '<span class="digi-log-time">' + escapeHtml(timeDisp) + '</span>' +
-                '<span class="digi-log-call">' + escapeHtml(q.call || '') + '</span>' +
-                '<span class="digi-log-freq">' + escapeHtml(freqDisp) + '</span>' +
-                '<span class="digi-log-band">' + escapeHtml(q.band || '') + '</span>' +
-                '<span class="digi-log-mode">' + escapeHtml(q.mode || '') + '</span>' +
-                '<span class="digi-log-rstsent">' + escapeHtml(rstSentDisp) + '</span>' +
-                '<span class="digi-log-rstrcvd">' + escapeHtml(q.rstRcvd || '') + '</span>' +
-                '<span class="digi-log-edit" title="Edit" onclick="editDigiQso(' + i + ')">&#x270E;</span>' +
-                '<span class="digi-log-del" title="Delete" onclick="deleteDigiQso(' + i + ')">&#x2715;</span>' +
-                '</div>';
-        }
-    }
-    if (logbookNext) {
-        html += '<div class="digi-log-more">' + qsoLog.length + ' of ' + logbookTotal + ' shown ' +
-                '<button class="digi-log-action-btn" onclick="loadLogbookPage(false)">Load older</button></div>';
-    }
+    for (var i = 0; i < qsoLog.length; i++) html += digiLogRowHtml(qsoLog[i], i === digiLogEditIdx);
     panel.innerHTML = html;
 }
 
+// Incremental updates: O(1) DOM work per event no matter how many pages are
+// loaded (a full rebuild at 10k rows costs ~250 ms, which would hit every
+// incoming QSO).
+function renderDigiLogRow(i) {
+    var el = digiLogRowEl(i);
+    if (!el || !qsoLog[i]) { renderDigiLog(); return; }
+    el.outerHTML = digiLogRowHtml(qsoLog[i], i === digiLogEditIdx);
+}
+
+function insertDigiLogRow(i) {          // after qsoLog.splice(i, 0, q)
+    var panel = document.getElementById('digiLogRows');
+    if (!panel || qsoLog.length === 1 || !digiLogRowEl(0)) { renderDigiLog(); return; }
+    var tmp = document.createElement('div');
+    tmp.innerHTML = digiLogRowHtml(qsoLog[i], i === digiLogEditIdx);
+    panel.insertBefore(tmp.firstElementChild, panel.children[i] || null);
+    updateDigiLogFooter();
+}
+
+function removeDigiLogRow(i) {          // after qsoLog.splice(i, 1)
+    var el = digiLogRowEl(i);
+    if (!el || !qsoLog.length) { renderDigiLog(); return; }
+    el.remove();
+    updateDigiLogFooter();
+}
+
+function appendDigiLogRows(from) {      // rows from..end were just added (a page)
+    var panel = document.getElementById('digiLogRows');
+    if (!panel || from === 0 || !digiLogRowEl(0)) { renderDigiLog(); return; }
+    var html = '';
+    for (var i = from; i < qsoLog.length; i++) html += digiLogRowHtml(qsoLog[i], false);
+    panel.insertAdjacentHTML('beforeend', html);
+    updateDigiLogFooter();
+}
+
 function editDigiQso(idx) {
+    if (idx < 0 || !qsoLog[idx]) return;
+    var prev = digiLogEditIdx;
     // If we were editing a blank new entry, remove it
-    if (digiLogEditIdx >= 0 && digiLogEditIdx !== idx && qsoLog[digiLogEditIdx] && !qsoLog[digiLogEditIdx].call) {
-        qsoLog.splice(digiLogEditIdx, 1);
-        if (idx > digiLogEditIdx) idx--;
+    if (prev >= 0 && prev !== idx && qsoLog[prev] && !qsoLog[prev].call) {
+        qsoLog.splice(prev, 1);
+        removeDigiLogRow(prev);
+        if (idx > prev) idx--;
+        prev = -1;
     }
     digiLogEditIdx = idx;
-    renderDigiLog();
+    if (prev >= 0 && prev !== idx) renderDigiLogRow(prev);
+    renderDigiLogRow(idx);
     // Focus the callsign field for convenience
     var el = document.getElementById('dleCall');
     if (el) el.focus();
 }
 
 function cancelEditDigiQso() {
-    // If we were editing a blank new entry, remove it
-    if (digiLogEditIdx >= 0 && qsoLog[digiLogEditIdx] && !qsoLog[digiLogEditIdx].call) {
-        qsoLog.splice(digiLogEditIdx, 1);
-    }
+    var idx = digiLogEditIdx;
     digiLogEditIdx = -1;
-    renderDigiLog();
+    if (idx < 0) return;
+    // If we were editing a blank new entry, remove it
+    if (qsoLog[idx] && !qsoLog[idx].call) {
+        qsoLog.splice(idx, 1);
+        removeDigiLogRow(idx);
+    } else {
+        renderDigiLogRow(idx);
+    }
 }
 
 function saveDigiQso(idx) {
@@ -10510,7 +10589,7 @@ function saveDigiQso(idx) {
     } else {
         digiLogEditIdx = -1;
         send({ cmd: 'updateQso', id: q.id, qso: q });
-        renderDigiLog();   // the qsoUpdated echo re-sorts it if date/time changed
+        renderDigiLogRow(idx);   // the qsoUpdated echo re-sorts it if date/time changed
     }
 }
 
@@ -10534,7 +10613,7 @@ function addDigiQso() {
     };
     qsoLog.unshift(entry);
     digiLogEditIdx = 0;
-    renderDigiLog();
+    insertDigiLogRow(0);
     var el = document.getElementById('dleCall');
     if (el) el.focus();
 }
@@ -10544,7 +10623,7 @@ function deleteDigiQso(idx) {
     else if (digiLogEditIdx > idx) digiLogEditIdx--;
     var removed = qsoLog.splice(idx, 1)[0];
     if (removed && removed.id) send({ cmd: 'deleteQso', id: removed.id });
-    renderDigiLog();
+    removeDigiLogRow(idx);
 }
 
 // Fetch the whole ADIF file from the server and save it under the same

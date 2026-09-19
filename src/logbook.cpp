@@ -14,33 +14,48 @@
 // QsoRecord
 // ---------------------------------------------------------------------------
 
-QsoRecord QsoRecord::fromJson(const QJsonObject &in, const QString &id)
+QsoRecord QsoRecord::normalized() const
 {
     QsoRecord r;
-    r.call = in.value("call").toString().trimmed().toUpper();
+    r.call = call.trimmed().toUpper();
     if (r.call.isEmpty() || r.call.size() > 32)
         return QsoRecord();   // invalid
 
-    r.id = id.isEmpty() ? QUuid::createUuid().toString(QUuid::WithoutBraces) : id;
-    const auto text = [&in](const char *key, int max) {
-        return in.value(QLatin1String(key)).toString().trimmed().left(max);
-    };
-    r.date      = text("date", 8);
-    r.time      = text("time", 6);
-    r.band      = text("band", 16);
-    r.mode      = text("mode", 16).toUpper();
-    r.grid      = text("grid", 16).toUpper();
-    r.theirGrid = text("theirGrid", 16).toUpper();
-    r.rstSent   = text("rstSent", 16);
-    r.rstRcvd   = text("rstRcvd", 16);
-    r.comment   = text("comment", 256);
-    r.name      = text("name", 128);
+    r.id        = id.isEmpty() ? QUuid::createUuid().toString(QUuid::WithoutBraces) : id;
+    r.date      = date.trimmed().left(8);
+    r.time      = time.trimmed().left(6);
+    r.band      = band.trimmed().left(16);
+    r.mode      = mode.trimmed().left(16).toUpper();
+    r.grid      = grid.trimmed().left(16).toUpper();
+    r.theirGrid = theirGrid.trimmed().left(16).toUpper();
+    r.rstSent   = rstSent.trimmed().left(16);
+    r.rstRcvd   = rstRcvd.trimmed().left(16);
+    r.comment   = comment.trimmed().left(256);
+    r.name      = name.trimmed().left(128);
+    r.freq      = freq > 0 ? freq : 0;
+    r.df        = df;
+    return r;
+}
 
-    const qint64 freq = in.value("freq").toVariant().toLongLong();
-    r.freq = freq > 0 ? freq : 0;
+QsoRecord QsoRecord::fromJson(const QJsonObject &in, const QString &id)
+{
+    QsoRecord r;
+    r.id        = id;
+    r.call      = in.value("call").toString();
+    r.date      = in.value("date").toString();
+    r.time      = in.value("time").toString();
+    r.band      = in.value("band").toString();
+    r.mode      = in.value("mode").toString();
+    r.grid      = in.value("grid").toString();
+    r.theirGrid = in.value("theirGrid").toString();
+    r.rstSent   = in.value("rstSent").toString();
+    r.rstRcvd   = in.value("rstRcvd").toString();
+    r.comment   = in.value("comment").toString();
+    r.name      = in.value("name").toString();
+    r.freq      = in.value("freq").toVariant().toLongLong();
     if (in.value("df").isDouble())
         r.df = in.value("df").toInt();
-    return r;
+    return r.normalized();
 }
 
 QJsonObject QsoRecord::toJson() const
@@ -112,38 +127,37 @@ QByteArray Logbook::adifHeader()
 }
 
 // Linear byte scanner: <NAME:len[:type]>value ... <EOR>.  Lengths are byte
-// counts, tags are case-insensitive, anything outside <> is ignored, and the
-// header (everything before <EOH>) is skipped.  No regex, no QString copy of
-// the whole file, so a 20 MB lifetime log loads in linear time.
+// counts, tags are case-insensitive, anything outside <> is ignored, and
+// whatever precedes <EOH> is discarded.  No regex and no QString copy of the
+// whole file, so a 20 MB lifetime log loads in linear time.
 QList<QsoRecord> Logbook::parseAdif(const QByteArray &data)
 {
     QList<QsoRecord> out;
     const int n = data.size();
     int pos = 0;
 
-    const int eoh = data.toLower().indexOf("<eoh>");
-    if (eoh >= 0) pos = eoh + 5;
-
     QHash<QByteArray, QByteArray> fields;
     const auto flush = [&fields, &out]() {
-        if (!fields.contains("CALL")) { fields.clear(); return; }
-        QJsonObject raw;
-        raw["call"]      = QString::fromUtf8(fields.value("CALL"));
-        raw["date"]      = QString::fromUtf8(fields.value("QSO_DATE"));
-        raw["time"]      = QString::fromUtf8(fields.value("TIME_ON"));
-        raw["band"]      = QString::fromUtf8(fields.value("BAND"));
-        raw["mode"]      = QString::fromUtf8(fields.value("MODE"));
-        raw["rstSent"]   = QString::fromUtf8(fields.value("RST_SENT"));
-        raw["rstRcvd"]   = QString::fromUtf8(fields.value("RST_RCVD"));
-        raw["theirGrid"] = QString::fromUtf8(fields.value("GRIDSQUARE"));
-        raw["grid"]      = QString::fromUtf8(fields.value("MY_GRIDSQUARE"));
-        raw["comment"]   = QString::fromUtf8(fields.value("COMMENT"));
-        raw["name"]      = QString::fromUtf8(fields.value("NAME"));
-        raw["freq"]      = qRound64(fields.value("FREQ").toDouble() * 1e6);
-        if (fields.contains("APP_WFWEB_DF"))
-            raw["df"] = fields.value("APP_WFWEB_DF").toInt();
-        QsoRecord r = QsoRecord::fromJson(raw, QString::fromUtf8(fields.value("APP_WFWEB_ID")));
-        if (r.isValid()) out.append(r);
+        if (fields.contains("CALL")) {
+            QsoRecord r;
+            r.id        = QString::fromUtf8(fields.value("APP_WFWEB_ID"));
+            r.call      = QString::fromUtf8(fields.value("CALL"));
+            r.date      = QString::fromUtf8(fields.value("QSO_DATE"));
+            r.time      = QString::fromUtf8(fields.value("TIME_ON"));
+            r.band      = QString::fromUtf8(fields.value("BAND"));
+            r.mode      = QString::fromUtf8(fields.value("MODE"));
+            r.rstSent   = QString::fromUtf8(fields.value("RST_SENT"));
+            r.rstRcvd   = QString::fromUtf8(fields.value("RST_RCVD"));
+            r.theirGrid = QString::fromUtf8(fields.value("GRIDSQUARE"));
+            r.grid      = QString::fromUtf8(fields.value("MY_GRIDSQUARE"));
+            r.comment   = QString::fromUtf8(fields.value("COMMENT"));
+            r.name      = QString::fromUtf8(fields.value("NAME"));
+            r.freq      = qRound64(fields.value("FREQ").toDouble() * 1e6);
+            if (fields.contains("APP_WFWEB_DF"))
+                r.df = fields.value("APP_WFWEB_DF").toInt();
+            r = r.normalized();
+            if (r.isValid()) out.append(r);
+        }
         fields.clear();
     };
 
@@ -156,6 +170,7 @@ QList<QsoRecord> Logbook::parseAdif(const QByteArray &data)
         pos = gt + 1;
 
         if (tag.compare("EOR", Qt::CaseInsensitive) == 0) { flush(); continue; }
+        if (tag.compare("EOH", Qt::CaseInsensitive) == 0) { fields.clear(); continue; }
         const int c1 = tag.indexOf(':');
         if (c1 < 0) continue;   // <EOH>, stray markup
         const int c2 = tag.indexOf(':', c1 + 1);
