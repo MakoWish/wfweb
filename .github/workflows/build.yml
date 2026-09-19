@@ -531,6 +531,8 @@ jobs:
               usr/plugins/audio/*.so usr/plugins/bearer/*.so \
             | awk '/=> \//{print $1, $3}' | grep -v " $(pwd)/usr/" \
             | awk '{print $1}' | sort -u > /tmp/host-libs
+          echo "Host-provided: $(tr '\n' ' ' < /tmp/host-libs)"
+          grep -qx libc.so.6 /tmp/host-libs || { echo "ldd resolution produced nothing"; exit 1; }
           { cat /tmp/base-packages; echo libasound2; } \
             | xargs dpkg -L | xargs -n1 basename | sort -u > /tmp/allowed
           if comm -23 /tmp/host-libs /tmp/allowed | grep .; then
