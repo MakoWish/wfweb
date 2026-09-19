@@ -1312,7 +1312,7 @@ body.digi-open #bottomBar { grid-row: 5; }
     align-items: center;
     color: var(--mode-accent);
     font-family: var(--font-mono);
-    font-size: 13px;
+    font-size: var(--fs-md);
     font-weight: bold;
     border-bottom: 1px solid var(--mode-accent-dim);
     padding-bottom: 5px;
@@ -1324,46 +1324,71 @@ body.digi-open #bottomBar { grid-row: 5; }
     flex: 1;
     min-height: 80px;
     font-family: var(--font-mono);
-    font-size: 11px;
+    font-size: var(--fs-sm);
 }
+/* Text colors come from the theme tokens: the old #447-on-#000820 date
+   column and #224 empty-state text were close to invisible. */
 .digi-log-row {
     display: grid;
-    grid-template-columns: 72px 56px 72px 72px 36px 36px 44px 44px 20px 20px;
-    gap: 3px;
-    padding: 2px 4px;
-    border-bottom: 1px solid #011;
-    color: #5af;
+    grid-template-columns: 80px 50px 80px 72px 40px 40px 46px 46px 22px 22px;
+    gap: 4px;
+    padding: 3px 4px;
+    border-bottom: 1px solid #012;
+    color: var(--text);
     align-items: center;
 }
-.digi-log-row.header { color: #448; font-size: 10px; border-bottom: 1px solid #024; padding-top: 0; }
-.digi-log-date { color: #447; }
-.digi-log-time { color: #447; }
-.digi-log-call { color: #8cf; font-weight: bold; }
-.digi-log-freq { color: #5af; }
-.digi-log-band { color: var(--mode-accent-dim); }
+.digi-log-row.header { color: var(--text-dim); font-size: var(--fs-xs); border-bottom: 1px solid #024; padding-top: 0; }
+.digi-log-date { color: var(--text-dim); }
+.digi-log-time { color: var(--text-dim); }
+.digi-log-call { color: var(--text); font-weight: bold; }
+.digi-log-freq { color: #7bf; }
+.digi-log-band { color: var(--text-dim); }
 .digi-log-mode { color: var(--mode-accent); }
-.digi-log-rstsent { color: #5a5; }
-.digi-log-rstrcvd { color: #a55; }
-.digi-log-edit { color: #248; cursor: pointer; font-size: 13px; text-align: center; line-height: 1; }
+.digi-log-rstsent { color: #8d8; }
+.digi-log-rstrcvd { color: #e99; }
+.digi-log-edit { color: var(--text-dim); cursor: pointer; font-size: 16px; text-align: center; line-height: 1; }
 .digi-log-edit:hover { color: var(--mode-accent); }
-.digi-log-save { color: #262; cursor: pointer; font-size: 15px; text-align: center; line-height: 1; }
-.digi-log-save:hover { color: #4f4; }
-.digi-log-del { color: #844; cursor: pointer; font-size: 14px; text-align: center; line-height: 1; }
+.digi-log-save { color: #6d6; cursor: pointer; font-size: 17px; text-align: center; line-height: 1; }
+.digi-log-save:hover { color: var(--state-ok); }
+.digi-log-del { color: #d77; cursor: pointer; font-size: 16px; text-align: center; line-height: 1; }
 .digi-log-del:hover { color: var(--state-error); }
-.digi-log-empty { color: #224; font-style: italic; padding: 8px 4px; }
+.digi-log-empty { color: var(--text-dim); font-style: italic; padding: 10px 4px; }
+.digi-log-warn { margin: 4px 0 6px; padding: 6px 8px; border: 1px solid var(--state-warn); color: var(--state-warn); font-size: var(--fs-sm); line-height: 1.4; }
+.digi-log-status { font-size: var(--fs-sm); color: var(--text-dim); }
+.digi-log-more { display: flex; justify-content: center; align-items: center; gap: 10px; padding: 6px 4px; color: var(--text-dim); font-size: var(--fs-sm); }
 .digi-log-input {
-    background: #001828; border: 1px solid var(--mode-accent-dim); color: #8cf;
-    font-family: var(--font-mono); font-size: 10px;
-    width: 100%; box-sizing: border-box; padding: 1px 2px;
+    background: #001828; border: 1px solid var(--mode-accent-dim); color: var(--text);
+    font-family: var(--font-mono); font-size: var(--fs-sm);
+    width: 100%; box-sizing: border-box; padding: 2px 3px;
 }
+/* "Add QSO" alone on the left; everything that manages the log file on the
+   right, behind one menu, so a logging action never sits next to a
+   download/import one. */
 .digi-log-actions {
     display: flex;
+    justify-content: space-between;
+    align-items: center;
     gap: 8px;
     margin-top: 8px;
     padding-top: 6px;
     border-top: 1px solid #024;
     flex-wrap: wrap;
 }
+.digi-log-manage { position: relative; display: flex; align-items: center; gap: 10px; margin-left: auto; }
+.digi-log-menu {
+    position: absolute; right: 0; bottom: calc(100% + 4px); min-width: 280px;
+    background: #000c2a; border: 1px solid var(--mode-accent-dim); border-radius: var(--radius);
+    box-shadow: 0 4px 16px rgba(0,0,0,0.6); padding: 4px; z-index: 5;
+}
+.digi-log-menu[hidden] { display: none; }
+.digi-log-menu button {
+    display: block; width: 100%; text-align: left; background: none; border: none;
+    color: var(--text); font-family: var(--font-mono); font-size: var(--fs-sm);
+    padding: 7px 10px; cursor: pointer; border-radius: 3px;
+}
+.digi-log-menu button:hover:not(:disabled) { background: var(--mode-accent-bg); color: var(--mode-accent); }
+.digi-log-menu button:disabled { color: var(--text-faint); cursor: default; }
+.digi-log-menu .hint { display: block; font-size: var(--fs-xs); color: var(--text-dim); margin-top: 2px; }
 .digi-log-action-btn {
     padding: 3px 12px;
     background: var(--mode-accent-bg);
@@ -2039,7 +2064,7 @@ body.digi-open #bottomBar { grid-row: 5; }
     #modeBtn { padding: 3px 5px; font-size: 11px; letter-spacing: 0; white-space: nowrap; }
     /* QSO log: the 10-column grid is ~500px wide. On a phone drop Band
        and both RST columns (band is implied by freq) and let Call flex. */
-    .digi-log-row { grid-template-columns: 54px 44px minmax(40px, 1fr) 58px 30px 18px 18px; gap: 2px; font-size: 9px; }
+    .digi-log-row { grid-template-columns: 70px 40px minmax(44px, 1fr) 56px 34px 20px 20px; gap: 3px; font-size: 11px; }
     .digi-log-row .digi-log-call { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .digi-log-band, .digi-log-rstsent, .digi-log-rstrcvd, #dleBand, #dleRstSent, #dleRstRcvd { display: none; }
     /* FreeDV readout is right-anchored and ~470px wide; let it wrap onto
@@ -2456,15 +2481,27 @@ body.digi-open #bottomBar { grid-row: 5; }
                 </label>
                 <span id="digiPskReporterStatus" style="font-size:10px;color:#556;margin-left:8px"></span>
             </div>
+            <div class="digi-settings-field" style="margin-top:6px;flex-direction:column;align-items:flex-start;gap:4px">
+                <label style="display:flex;align-items:center;gap:6px;color:#8cf;font-size:12px;cursor:pointer">
+                    <input type="checkbox" id="digiWsjtxEnable">
+                    <span>WSJT-X UDP output (GridTracker, JTAlert, loggers)</span>
+                </label>
+                <input type="text" id="digiWsjtxTarget" class="wf-field" placeholder="host:2237 or 239.255.0.0:2237" style="width:220px">
+                <label style="display:flex;align-items:center;gap:6px;color:#8cf;font-size:11px;cursor:pointer">
+                    <input type="checkbox" id="digiWsjtxDecodes">
+                    <span>Also forward FT8/FT4 decodes</span>
+                </label>
+            </div>
             <button id="digiSettingsCloseBtn" class="digi-settings-close">Close</button>
         </div>
 
         <!-- DIGI Log Modal -->
         <div id="digiLogModal" class="digi-log-modal">
             <div class="digi-log-modal-title">
-                <span>QSO Log</span>
+                <span>QSO Log <span id="digiLogCount"></span></span>
                 <button id="digiLogCloseBtn" class="digi-settings-close" style="width:auto;margin:0;padding:2px 12px">&#x2715; Close</button>
             </div>
+            <div id="digiLogWarn" class="digi-log-warn" hidden></div>
             <div class="digi-log-scroll">
                 <div class="digi-log-row header">
                     <span class="digi-log-date">Date</span>
@@ -2479,11 +2516,23 @@ body.digi-open #bottomBar { grid-row: 5; }
                     <span></span>
                 </div>
                 <div id="digiLogRows"></div>
+                <div id="digiLogMore" class="digi-log-more" style="display:none"></div>
             </div>
             <div class="digi-log-actions">
                 <button id="digiAddQsoBtn" class="digi-log-action-btn">&#10010; Add QSO</button>
-                <button id="digiAdifBtn" class="digi-log-action-btn">&#11123; Download ADIF</button>
-                <button id="digiClearLogBtn" class="digi-log-action-btn danger">&#10005; Clear Log</button>
+                <div class="digi-log-manage">
+                    <span id="digiLogStatus" class="digi-log-status"></span>
+                    <button id="digiLogMenuBtn" class="digi-log-action-btn" aria-haspopup="true" aria-expanded="false">Log management &#9662;</button>
+                    <div id="digiLogMenu" class="digi-log-menu" hidden>
+                        <button id="digiAdifNewBtn">&#11123; Download new QSOs <span id="digiAdifNewCount"></span>
+                            <span class="hint">Only the QSOs not included in a previous download</span></button>
+                        <button id="digiAdifBtn">&#11123; Download the full logbook
+                            <span class="hint">Every QSO, as stored on the server (ADIF)</span></button>
+                        <button id="digiAdifImportBtn">&#11121; Import an ADIF file&hellip;
+                            <span class="hint">Merged into the logbook; duplicates are skipped</span></button>
+                    </div>
+                    <input type="file" id="digiAdifFile" accept=".adi,.adif,.txt" hidden>
+                </div>
             </div>
         </div>
 
@@ -2970,7 +3019,14 @@ var digiTuneNode = null;    // AudioWorkletNode for continuous tune tone
 var DIGI_MAX_TX_ATTEMPTS = 5; // retry same message up to 5 times (~75s for FT8)
 var digiDecodes = [];
 var digiDirectedDecodes = [];
-var qsoLog = [];
+var qsoLog = [];            // the loaded page(s) of the server logbook, newest first
+var logbookTotal = 0;       // QSOs on the server
+var logbookNext = '';       // cursor for the next (older) page, '' at the end
+var logbookLoading = false;
+var logbookPersistent = true;   // false: the server's file dies with its container; keep a copy here
+var logbookUnexported = 0;      // QSOs without an export stamp ("Download new" candidates)
+var digiLogStatusTimer = null;
+var wsjtxSettings = null;   // last values received from the server, to send only changes
 var digiLogEditIdx = -1; // index of row currently being edited, -1 = none
 var digiHashBook = null;
 var digiQsoState = 'IDLE';
@@ -3095,6 +3151,19 @@ function handleMessage(msg) {
             }
             if (msg.model) rigModelName = msg.model;
             if (msg.name !== undefined) rigTagName = msg.name || '';
+            if (msg.logbookPersistent !== undefined) {
+                logbookPersistent = !!msg.logbookPersistent;
+                updateDigiLogWarning();
+            }
+            if (msg.wsjtxTarget !== undefined) {
+                wsjtxSettings = { enabled: !!msg.wsjtxEnabled, target: msg.wsjtxTarget || '', decodes: !!msg.wsjtxDecodes };
+                var wse = document.getElementById('digiWsjtxEnable');
+                var wst = document.getElementById('digiWsjtxTarget');
+                var wsd = document.getElementById('digiWsjtxDecodes');
+                if (wse) wse.checked = wsjtxSettings.enabled;
+                if (wst) wst.value = wsjtxSettings.target;
+                if (wsd) wsd.checked = wsjtxSettings.decodes;
+            }
             updateRigTag();
             if (msg.freedvModes) freedvModes = msg.freedvModes;
             if (msg.isLan !== undefined || msg.lanConnected !== undefined) {
@@ -3320,6 +3389,57 @@ function handleMessage(msg) {
         case 'pskReporterStatus':
             updatePskReporterStatus(msg);
             break;
+        case 'logbook':
+            // Summary only (on connect, and after clear / merge / import):
+            // the log is paged over REST, so reload the first page.
+            logbookTotal = msg.count || 0;
+            if (msg.unexported !== undefined) logbookUnexported = msg.unexported;
+            if (msg.persistent !== undefined) { logbookPersistent = !!msg.persistent; updateDigiLogWarning(); }
+            loadLogbookPage(true);
+            migrateBrowserLog();
+            break;
+        case 'logbookMerged':
+            // The server has our browser-local copy.  Drop it only if the
+            // server's storage outlives its container; otherwise it stays
+            // here as the backup and is re-sent on the next connect.
+            if (msg.persistent) {
+                try { localStorage.removeItem('qsoLog'); localStorage.removeItem('digiQsoLog'); } catch(e) {}
+            }
+            if (msg.unexported !== undefined) { logbookUnexported = msg.unexported; updateDigiLogFooter(); }
+            break;
+        case 'qsoAdded': {
+            if (msg.count !== undefined) logbookTotal = msg.count;
+            if (msg.unexported !== undefined) logbookUnexported = msg.unexported;
+            var ai = insertQsoSorted(msg.qso);
+            if (ai >= 0) insertDigiLogRow(ai); else updateDigiLogFooter();
+            break;
+        }
+        case 'qsoUpdated': {
+            var ui = findQsoIdx(msg.qso && msg.qso.id);
+            if (ui >= 0) {
+                if (digiLogEditIdx === ui) digiLogEditIdx = -1;
+                else if (digiLogEditIdx > ui) digiLogEditIdx--;
+                qsoLog.splice(ui, 1);
+                removeDigiLogRow(ui);
+                var ni = insertQsoSorted(msg.qso);
+                if (ni >= 0) insertDigiLogRow(ni);
+            }
+            break;
+        }
+        case 'qsoDeleted': {
+            if (msg.count !== undefined) logbookTotal = msg.count;
+            if (msg.unexported !== undefined) logbookUnexported = msg.unexported;
+            var di = findQsoIdx(msg.id);
+            if (di >= 0) {
+                if (digiLogEditIdx === di) digiLogEditIdx = -1;
+                else if (digiLogEditIdx > di) digiLogEditIdx--;
+                qsoLog.splice(di, 1);
+                removeDigiLogRow(di);
+            } else {
+                updateDigiLogFooter();
+            }
+            break;
+        }
         case 'radeCallsign':
             radeRxCallsign = msg.callsign || '';
             updateFreeDVStatus({});
@@ -8095,7 +8215,11 @@ function reportDigiSpot(d) {
         grid: grid,
         mode: digiMode,
         snr: Math.round(d.snr || 0),
-        freq: rfFreq
+        freq: rfFreq,
+        dt: Number(d.dt || 0),
+        df: Math.round(d.freq || 0),
+        time: d.time || '',
+        message: d.msg || ''
     });
 }
 
@@ -10139,6 +10263,121 @@ function freqToBand(hz) {
     return '';
 }
 
+// ---- Server logbook ------------------------------------------------------
+// The server owns the log (an ADIF file).  The browser holds only the pages
+// it has fetched, newest first, and applies the add/update/delete deltas the
+// server broadcasts.  Nothing here touches localStorage any more.
+
+// Commit a complete QSO in one place.  The server's qsoAdded echo is what
+// inserts it (with its id) into every browser, this one included.  A draft
+// row (manual entry) is removed here; it is replaced by that echo.
+function commitQsoLogEntry(entry, draftIdx) {
+    if (!entry || !entry.call) return null;
+    if (draftIdx !== undefined && draftIdx >= 0) {
+        qsoLog.splice(draftIdx, 1);
+        digiLogEditIdx = -1;
+        removeDigiLogRow(draftIdx);
+    }
+    send({ cmd: 'qsoLogged', qso: entry });
+    if (!logbookPersistent) mirrorQsoLocally(entry);
+    return entry;
+}
+
+// Server without durable storage (container, no volume): keep what this
+// browser logs in localStorage too, exactly as before the server logbook
+// existed, so a recreated container is re-seeded from here on connect.
+function mirrorQsoLocally(entry) {
+    try {
+        var copy = JSON.parse(localStorage.getItem('qsoLog') || '[]');
+        if (!Array.isArray(copy)) copy = [];
+        copy.unshift(entry);
+        localStorage.setItem('qsoLog', JSON.stringify(copy.slice(0, 500)));
+    } catch(e) {}
+}
+
+function updateDigiLogWarning() {
+    var el = document.getElementById('digiLogWarn');
+    if (!el) return;
+    el.hidden = logbookPersistent;
+    if (!logbookPersistent) {
+        el.textContent = '\u26A0 This server keeps its logbook inside a container with no volume mounted at /data, ' +
+            'so the log is lost when the container is recreated. QSOs you log from this browser are also kept ' +
+            'here as a backup and re-sent to the server on connect. Mount a volume to fix this (see DOCKER.md).';
+    }
+}
+
+function qsoSortKey(q) { return (q.date || '') + (q.time || ''); }
+
+function findQsoIdx(id) {
+    if (!id) return -1;
+    for (var i = 0; i < qsoLog.length; i++) if (qsoLog[i].id === id) return i;
+    return -1;
+}
+
+// Insert a server entry at its chronological place in the loaded pages.
+// Anything older than the oldest loaded entry belongs to a page not yet
+// fetched, so it is left for the paging to bring in.
+// Returns the index it was inserted at, or -1.
+function insertQsoSorted(q) {
+    if (!q || !q.id || findQsoIdx(q.id) >= 0) return -1;
+    var start = 0;
+    // an in-progress draft row (no id) stays on top
+    while (start < qsoLog.length && !qsoLog[start].id) start++;
+    var key = qsoSortKey(q);
+    var i = start;
+    while (i < qsoLog.length && qsoSortKey(qsoLog[i]) > key) i++;
+    if (i === qsoLog.length && logbookNext) return -1;   // older than what is loaded
+    qsoLog.splice(i, 0, q);
+    if (digiLogEditIdx >= i) digiLogEditIdx++;
+    return i;
+}
+
+// Fetch a page of the server logbook: the newest page (reset) or the next
+// older one after the current cursor.
+function loadLogbookPage(reset) {
+    if (logbookLoading) return;
+    if (reset) logbookNext = '';
+    else if (!logbookNext) return;
+    logbookLoading = true;
+    var url = '/api/v1/logbook?limit=100' + (reset ? '' : '&before=' + encodeURIComponent(logbookNext));
+    fetch(url, { cache: 'no-store' }).then(function(r) { return r.json(); }).then(function(j) {
+        var entries = Array.isArray(j.entries) ? j.entries : [];
+        if (reset) {
+            // keep a draft row that is being typed into
+            var draft = (digiLogEditIdx >= 0 && qsoLog[digiLogEditIdx] && !qsoLog[digiLogEditIdx].id)
+                        ? qsoLog[digiLogEditIdx] : null;
+            qsoLog = entries;
+            if (draft) { qsoLog.unshift(draft); digiLogEditIdx = 0; }
+            else digiLogEditIdx = -1;
+            logbookTotal = j.total || 0;
+            logbookNext = j.next || '';
+            renderDigiLog();
+        } else {
+            var from = qsoLog.length;
+            qsoLog = qsoLog.concat(entries);
+            logbookTotal = j.total || 0;
+            logbookNext = j.next || '';
+            appendDigiLogRows(from);
+        }
+    }).catch(function(e) {
+        console.warn('Logbook page load failed', e);
+    }).finally(function() { logbookLoading = false; });
+}
+
+// Hand the browser-local log (the pre-server log, or the backup kept for a
+// non-persistent server) to the server.  Idempotent on the server side; the
+// local copy is removed only when the server confirms it is on durable
+// storage (see 'logbookMerged').
+function migrateBrowserLog() {
+    try {
+        var legacy = localStorage.getItem('qsoLog') || localStorage.getItem('digiQsoLog');
+        if (!legacy) return;
+        var entries = JSON.parse(legacy);
+        if (Array.isArray(entries) && entries.length) send({ cmd: 'mergeLogbook', entries: entries });
+        else { localStorage.removeItem('qsoLog'); localStorage.removeItem('digiQsoLog'); }
+    } catch(e) { console.warn('Could not migrate browser QSO log', e); }
+}
+
 function logDigiQso(dxCall, rstSent) {
     var now = new Date();
     var iso = now.toISOString();
@@ -10157,9 +10396,7 @@ function logDigiQso(dxCall, rstSent) {
                  ((rstSent >= 0 ? '+' : '') + Math.round(rstSent)) : '',
         rstRcvd: digiTheirReport || ''
     };
-    qsoLog.unshift(entry);
-    try { localStorage.setItem('qsoLog', JSON.stringify(qsoLog.slice(0, 500))); } catch(e) {}
-    renderDigiLog();
+    commitQsoLogEntry(entry);
     // Show "LOGGED" confirmation in the directed panel
     var dirPanel = document.getElementById('digiDirectedPanel');
     if (dirPanel) {
@@ -10196,10 +10433,7 @@ function addQsoLogEntry(fields) {
         rstSent: fields.rstSent || '',
         rstRcvd: fields.rstRcvd || ''
     };
-    qsoLog.unshift(entry);
-    try { localStorage.setItem('qsoLog', JSON.stringify(qsoLog.slice(0, 500))); } catch(e) {}
-    renderDigiLog();
-    return entry;
+    return commitQsoLogEntry(entry);
 }
 window.addQsoLogEntry = addQsoLogEntry;
 
@@ -10227,9 +10461,7 @@ function logCWQso() {
         rstSent: '599',
         rstRcvd: '599'
     };
-    qsoLog.unshift(entry);
-    try { localStorage.setItem('qsoLog', JSON.stringify(qsoLog.slice(0, 500))); } catch(e) {}
-    renderDigiLog();
+    commitQsoLogEntry(entry);
     openLogModal();
 }
 
@@ -10263,79 +10495,155 @@ function openLogModal() {
     document.getElementById('digiLogModal').classList.add('visible');
 }
 
+// One log row.  Row actions resolve their index from the element's position
+// at click time (digiLogRowIdx), so rows can be inserted or removed
+// individually without renumbering every other row.
+function digiLogRowHtml(q, editing) {
+    var dateDisp = q.date ? q.date.substr(0,4)+'-'+q.date.substr(4,2)+'-'+q.date.substr(6,2) : '';
+    var timeDisp = q.time ? q.time.substr(0,2)+':'+q.time.substr(2,2) : (q.time || '');
+    var freqDisp = q.freq ? (q.freq / 1e6).toFixed(3) : '';
+    if (editing) {
+        return '<div class="digi-log-row">' +
+            '<input class="digi-log-input" id="dleDate" value="' + escapeHtml(dateDisp) + '">' +
+            '<input class="digi-log-input" id="dleTime" value="' + escapeHtml(timeDisp) + '">' +
+            '<input class="digi-log-input" id="dleCall" value="' + escapeHtml(q.call || '') + '">' +
+            '<input class="digi-log-input" id="dleFreq" value="' + escapeHtml(freqDisp) + '">' +
+            '<input class="digi-log-input" id="dleBand" value="' + escapeHtml(q.band || '') + '">' +
+            '<input class="digi-log-input" id="dleMode" value="' + escapeHtml(q.mode || '') + '">' +
+            '<input class="digi-log-input" id="dleRstSent" value="' + escapeHtml(q.rstSent || '') + '">' +
+            '<input class="digi-log-input" id="dleRstRcvd" value="' + escapeHtml(q.rstRcvd || '') + '">' +
+            '<span class="digi-log-save" title="Save" onclick="saveDigiQso(digiLogRowIdx(this))">&#x2713;</span>' +
+            '<span class="digi-log-del" title="Cancel" onclick="cancelEditDigiQso()">&#x2715;</span>' +
+            '</div>';
+    }
+    var rstSentDisp = q.rstSent !== undefined ? q.rstSent : (q.snr !== undefined ? ((q.snr>=0?'+':'')+Math.round(q.snr)) : '');
+    return '<div class="digi-log-row">' +
+        '<span class="digi-log-date">' + escapeHtml(dateDisp) + '</span>' +
+        '<span class="digi-log-time">' + escapeHtml(timeDisp) + '</span>' +
+        '<span class="digi-log-call">' + escapeHtml(q.call || '') + '</span>' +
+        '<span class="digi-log-freq">' + escapeHtml(freqDisp) + '</span>' +
+        '<span class="digi-log-band">' + escapeHtml(q.band || '') + '</span>' +
+        '<span class="digi-log-mode">' + escapeHtml(q.mode || '') + '</span>' +
+        '<span class="digi-log-rstsent">' + escapeHtml(rstSentDisp) + '</span>' +
+        '<span class="digi-log-rstrcvd">' + escapeHtml(q.rstRcvd || '') + '</span>' +
+        '<span class="digi-log-edit" title="Edit" onclick="editDigiQso(digiLogRowIdx(this))">&#x270E;</span>' +
+        '<span class="digi-log-del" title="Delete" onclick="deleteDigiQso(digiLogRowIdx(this))">&#x2715;</span>' +
+        '</div>';
+}
+
+function digiLogRowIdx(el) {
+    var row = el.closest('.digi-log-row');
+    return row ? Array.prototype.indexOf.call(row.parentNode.children, row) : -1;
+}
+
+function digiLogRowEl(i) {
+    var panel = document.getElementById('digiLogRows');
+    var el = panel && panel.children[i];
+    return (el && el.classList.contains('digi-log-row')) ? el : null;
+}
+
+function updateDigiLogFooter() {
+    var countEl = document.getElementById('digiLogCount');
+    if (countEl) countEl.textContent = logbookTotal ? '(' + logbookTotal + ')' : '';
+    var newCount = document.getElementById('digiAdifNewCount');
+    if (newCount) newCount.textContent = '(' + logbookUnexported + ')';
+    var newBtn = document.getElementById('digiAdifNewBtn');
+    if (newBtn) newBtn.disabled = !logbookUnexported;
+    var more = document.getElementById('digiLogMore');
+    if (!more) return;
+    if (logbookNext) {
+        more.innerHTML = qsoLog.length + ' of ' + logbookTotal + ' shown ' +
+            '<button class="digi-log-action-btn" onclick="loadLogbookPage(false)">Load older</button>';
+        more.style.display = '';
+    } else {
+        more.innerHTML = '';
+        more.style.display = 'none';
+    }
+}
+
+// Full rebuild: first page, reset, or when the incremental path can't apply.
 function renderDigiLog() {
     var panel = document.getElementById('digiLogRows');
     if (!panel) return;
+    updateDigiLogFooter();
     if (!qsoLog.length) {
         panel.innerHTML = '<div class="digi-log-empty">No QSOs logged yet.</div>';
         return;
     }
     var html = '';
-    for (var i = 0; i < qsoLog.length; i++) {
-        var q = qsoLog[i];
-        var dateDisp = q.date ? q.date.substr(0,4)+'-'+q.date.substr(4,2)+'-'+q.date.substr(6,2) : '';
-        var timeDisp = q.time ? q.time.substr(0,2)+':'+q.time.substr(2,2) : (q.time || '');
-        var freqDisp = q.freq ? (q.freq / 1e6).toFixed(3) : '';
-        if (i === digiLogEditIdx) {
-            // Editable row
-            html += '<div class="digi-log-row">' +
-                '<input class="digi-log-input" id="dleDate" value="' + escapeHtml(dateDisp) + '">' +
-                '<input class="digi-log-input" id="dleTime" value="' + escapeHtml(timeDisp) + '">' +
-                '<input class="digi-log-input" id="dleCall" value="' + escapeHtml(q.call || '') + '">' +
-                '<input class="digi-log-input" id="dleFreq" value="' + escapeHtml(freqDisp) + '">' +
-                '<input class="digi-log-input" id="dleBand" value="' + escapeHtml(q.band || '') + '">' +
-                '<input class="digi-log-input" id="dleMode" value="' + escapeHtml(q.mode || '') + '">' +
-                '<input class="digi-log-input" id="dleRstSent" value="' + escapeHtml(q.rstSent || '') + '">' +
-                '<input class="digi-log-input" id="dleRstRcvd" value="' + escapeHtml(q.rstRcvd || '') + '">' +
-                '<span class="digi-log-save" title="Save" onclick="saveDigiQso(' + i + ')">&#x2713;</span>' +
-                '<span class="digi-log-del" title="Cancel" onclick="cancelEditDigiQso()">&#x2715;</span>' +
-                '</div>';
-        } else {
-            var rstSentDisp = q.rstSent !== undefined ? q.rstSent : (q.snr !== undefined ? ((q.snr>=0?'+':'')+Math.round(q.snr)) : '');
-            html += '<div class="digi-log-row">' +
-                '<span class="digi-log-date">' + escapeHtml(dateDisp) + '</span>' +
-                '<span class="digi-log-time">' + escapeHtml(timeDisp) + '</span>' +
-                '<span class="digi-log-call">' + escapeHtml(q.call || '') + '</span>' +
-                '<span class="digi-log-freq">' + escapeHtml(freqDisp) + '</span>' +
-                '<span class="digi-log-band">' + escapeHtml(q.band || '') + '</span>' +
-                '<span class="digi-log-mode">' + escapeHtml(q.mode || '') + '</span>' +
-                '<span class="digi-log-rstsent">' + escapeHtml(rstSentDisp) + '</span>' +
-                '<span class="digi-log-rstrcvd">' + escapeHtml(q.rstRcvd || '') + '</span>' +
-                '<span class="digi-log-edit" title="Edit" onclick="editDigiQso(' + i + ')">&#x270E;</span>' +
-                '<span class="digi-log-del" title="Delete" onclick="deleteDigiQso(' + i + ')">&#x2715;</span>' +
-                '</div>';
-        }
-    }
+    for (var i = 0; i < qsoLog.length; i++) html += digiLogRowHtml(qsoLog[i], i === digiLogEditIdx);
     panel.innerHTML = html;
 }
 
+// Incremental updates: O(1) DOM work per event no matter how many pages are
+// loaded (a full rebuild at 10k rows costs ~250 ms, which would hit every
+// incoming QSO).
+function renderDigiLogRow(i) {
+    var el = digiLogRowEl(i);
+    if (!el || !qsoLog[i]) { renderDigiLog(); return; }
+    el.outerHTML = digiLogRowHtml(qsoLog[i], i === digiLogEditIdx);
+}
+
+function insertDigiLogRow(i) {          // after qsoLog.splice(i, 0, q)
+    var panel = document.getElementById('digiLogRows');
+    if (!panel || qsoLog.length === 1 || !digiLogRowEl(0)) { renderDigiLog(); return; }
+    var tmp = document.createElement('div');
+    tmp.innerHTML = digiLogRowHtml(qsoLog[i], i === digiLogEditIdx);
+    panel.insertBefore(tmp.firstElementChild, panel.children[i] || null);
+    updateDigiLogFooter();
+}
+
+function removeDigiLogRow(i) {          // after qsoLog.splice(i, 1)
+    var el = digiLogRowEl(i);
+    if (!el || !qsoLog.length) { renderDigiLog(); return; }
+    el.remove();
+    updateDigiLogFooter();
+}
+
+function appendDigiLogRows(from) {      // rows from..end were just added (a page)
+    var panel = document.getElementById('digiLogRows');
+    if (!panel || from === 0 || !digiLogRowEl(0)) { renderDigiLog(); return; }
+    var html = '';
+    for (var i = from; i < qsoLog.length; i++) html += digiLogRowHtml(qsoLog[i], false);
+    panel.insertAdjacentHTML('beforeend', html);
+    updateDigiLogFooter();
+}
+
 function editDigiQso(idx) {
+    if (idx < 0 || !qsoLog[idx]) return;
+    var prev = digiLogEditIdx;
     // If we were editing a blank new entry, remove it
-    if (digiLogEditIdx >= 0 && digiLogEditIdx !== idx && qsoLog[digiLogEditIdx] && !qsoLog[digiLogEditIdx].call) {
-        qsoLog.splice(digiLogEditIdx, 1);
-        try { localStorage.setItem('qsoLog', JSON.stringify(qsoLog.slice(0, 500))); } catch(e) {}
-        if (idx > digiLogEditIdx) idx--;
+    if (prev >= 0 && prev !== idx && qsoLog[prev] && !qsoLog[prev].call) {
+        qsoLog.splice(prev, 1);
+        removeDigiLogRow(prev);
+        if (idx > prev) idx--;
+        prev = -1;
     }
     digiLogEditIdx = idx;
-    renderDigiLog();
+    if (prev >= 0 && prev !== idx) renderDigiLogRow(prev);
+    renderDigiLogRow(idx);
     // Focus the callsign field for convenience
     var el = document.getElementById('dleCall');
     if (el) el.focus();
 }
 
 function cancelEditDigiQso() {
-    // If we were editing a blank new entry, remove it
-    if (digiLogEditIdx >= 0 && qsoLog[digiLogEditIdx] && !qsoLog[digiLogEditIdx].call) {
-        qsoLog.splice(digiLogEditIdx, 1);
-        try { localStorage.setItem('qsoLog', JSON.stringify(qsoLog.slice(0, 500))); } catch(e) {}
-    }
+    var idx = digiLogEditIdx;
     digiLogEditIdx = -1;
-    renderDigiLog();
+    if (idx < 0) return;
+    // If we were editing a blank new entry, remove it
+    if (qsoLog[idx] && !qsoLog[idx].call) {
+        qsoLog.splice(idx, 1);
+        removeDigiLogRow(idx);
+    } else {
+        renderDigiLogRow(idx);
+    }
 }
 
 function saveDigiQso(idx) {
     var q = qsoLog[idx];
     if (!q) return;
+    var isNewQso = !q.call;
     var dateVal   = (document.getElementById('dleDate')    || {}).value || '';
     var timeVal   = (document.getElementById('dleTime')    || {}).value || '';
     var callVal   = (document.getElementById('dleCall')    || {}).value || '';
@@ -10355,9 +10663,17 @@ function saveDigiQso(idx) {
     q.mode    = modeVal.toUpperCase();
     q.rstSent = rstSent;
     q.rstRcvd = rstRcvd;
-    digiLogEditIdx = -1;
-    try { localStorage.setItem('qsoLog', JSON.stringify(qsoLog.slice(0, 500))); } catch(e) {}
-    renderDigiLog();
+    if (!q.call) {
+        renderDigiLog();
+        return;
+    }
+    if (isNewQso) {
+        commitQsoLogEntry(q, idx);
+    } else {
+        digiLogEditIdx = -1;
+        send({ cmd: 'updateQso', id: q.id, qso: q });
+        renderDigiLogRow(idx);   // the qsoUpdated echo re-sorts it if date/time changed
+    }
 }
 
 function addDigiQso() {
@@ -10380,7 +10696,7 @@ function addDigiQso() {
     };
     qsoLog.unshift(entry);
     digiLogEditIdx = 0;
-    renderDigiLog();
+    insertDigiLogRow(0);
     var el = document.getElementById('dleCall');
     if (el) el.focus();
 }
@@ -10388,73 +10704,90 @@ function addDigiQso() {
 function deleteDigiQso(idx) {
     if (digiLogEditIdx === idx) digiLogEditIdx = -1;
     else if (digiLogEditIdx > idx) digiLogEditIdx--;
-    qsoLog.splice(idx, 1);
-    try { localStorage.setItem('qsoLog', JSON.stringify(qsoLog.slice(0, 500))); } catch(e) {}
-    renderDigiLog();
+    var removed = qsoLog.splice(idx, 1)[0];
+    if (removed && removed.id) send({ cmd: 'deleteQso', id: removed.id });
+    removeDigiLogRow(idx);
 }
 
-function downloadAdif() {
-    function adifField(tag, val) {
-        if (!val) return '';
-        var s = String(val);
-        return '<' + tag + ':' + s.length + '>' + s + ' ';
-    }
-    var lines = ['ADIF Export from wfweb\n<EOH>\n'];
-    for (var i = qsoLog.length - 1; i >= 0; i--) {
-        var q = qsoLog[i];
-        if (!q.call) continue;
-        var freqMHz = q.freq ? (q.freq / 1e6).toFixed(6) : '';
-        lines.push(
-            adifField('CALL', q.call) +
-            adifField('QSO_DATE', q.date) +
-            adifField('TIME_ON', q.time) +
-            adifField('FREQ', freqMHz) +
-            adifField('BAND', q.band) +
-            adifField('MODE', q.mode) +
-            adifField('RST_SENT', q.rstSent) +
-            adifField('RST_RCVD', q.rstRcvd) +
-            adifField('GRIDSQUARE', q.theirGrid) +
-            adifField('MY_GRIDSQUARE', q.grid) +
-            '<EOR>\n'
-        );
-    }
-    var now = new Date();
-    var iso = now.toISOString();
+function setDigiLogStatus(text) {
+    var el = document.getElementById('digiLogStatus');
+    if (!el) return;
+    el.textContent = text || '';
+    clearTimeout(digiLogStatusTimer);
+    if (text) digiLogStatusTimer = setTimeout(function() { el.textContent = ''; }, 8000);
+}
+
+function saveAdifFile(text, suffix) {
+    var iso = new Date().toISOString();
     var ts = iso.substr(0, 10).replace(/-/g, '') + '_' + iso.substr(11, 8).replace(/:/g, '');
     var myCall = ((document.getElementById('digiMyCall') || {}).value || '').toUpperCase().replace(/[^A-Z0-9]/g, '') || 'LOG';
-    var filename = 'wfweb_' + myCall + '_' + ts + '.adi';
-    var blob = new Blob([lines.join('')], { type: 'text/plain' });
     var a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = filename;
+    a.href = URL.createObjectURL(new Blob([text], { type: 'application/x-adif' }));
+    a.download = 'wfweb_' + myCall + '_' + ts + suffix + '.adi';
     a.click();
     URL.revokeObjectURL(a.href);
 }
 
-var clearLogConfirmTimer = null;
-function clearDigiLog() {
-    var btn = document.getElementById('digiClearLogBtn');
-    if (!qsoLog.length) {
-        if (btn) { btn.textContent = 'Log is empty'; setTimeout(function() { btn.textContent = '\u2715 Clear Log'; }, 1500); }
-        return;
-    }
-    // First click: ask for confirmation by changing button text
-    if (!clearLogConfirmTimer) {
-        if (btn) btn.textContent = 'Confirm Clear? (' + qsoLog.length + ' QSOs)';
-        clearLogConfirmTimer = setTimeout(function() {
-            clearLogConfirmTimer = null;
-            if (btn) btn.textContent = '\u2715 Clear Log';
-        }, 4000);
-        return;
-    }
-    // Second click: confirmed — download ADIF then clear
-    clearTimeout(clearLogConfirmTimer);
-    clearLogConfirmTimer = null;
-    downloadAdif();
-    qsoLog = [];
-    try { localStorage.removeItem('qsoLog'); } catch(e) {}
-    renderDigiLog();
-    if (btn) btn.textContent = '\u2715 Clear Log';
+// Download the full logbook file (a faithful copy of what the server
+// stores, wfweb bookkeeping fields included, so it restores cleanly).
+function downloadAdif() {
+    setDigiLogStatus('Preparing download\u2026');
+    return fetch('/api/v1/logbook/adif', { cache: 'no-store' }).then(function(r) {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.text();
+    }).then(function(text) {
+        saveAdifFile(text, '');
+        setDigiLogStatus('Downloaded the full logbook (' + logbookTotal + ' QSOs)');
+    }).catch(function(e) {
+        setDigiLogStatus('Download failed: ' + e.message);
+    });
+}
+
+// Download only the QSOs not yet exported, as plain ADIF without wfweb's
+// own fields (this file is meant for other logging services).  The server
+// returns the document together with the ids it contains; once the file is
+// saved the browser confirms exactly those ids, so a QSO logged in the
+// meantime stays "new" for the next download.
+function downloadNewQsos() {
+    setDigiLogStatus('Preparing download\u2026');
+    return fetch('/api/v1/logbook/export', { cache: 'no-store' }).then(function(r) {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.json();
+    }).then(function(j) {
+        var ids = Array.isArray(j.ids) ? j.ids : [];
+        if (!ids.length) { setDigiLogStatus('No new QSOs to download'); return; }
+        saveAdifFile(j.adif || '', '_new');
+        return fetch('/api/v1/logbook/exported', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ids: ids })
+        }).then(function(r) { return r.json(); }).then(function(k) {
+            logbookUnexported = k.unexported || 0;
+            updateDigiLogFooter();
+            setDigiLogStatus('Downloaded ' + ids.length + ' new QSO' + (ids.length === 1 ? '' : 's'));
+        });
+    }).catch(function(e) {
+        setDigiLogStatus('Download failed: ' + e.message);
+    });
+}
+
+// Merge an ADIF file into the server logbook (duplicates are skipped).  The
+// records count as already exported: they come from a log that handled its
+// own uploads.  The result is shown inline; nothing pops up.
+function importAdif(file) {
+    if (!file) return;
+    setDigiLogStatus('Importing ' + file.name + '\u2026');
+    file.arrayBuffer().then(function(buf) {
+        return fetch('/api/v1/logbook/adif', { method: 'POST', body: buf });
+    }).then(function(r) {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.json();
+    }).then(function(j) {
+        var msg = 'Imported ' + j.added + ' QSO' + (j.added === 1 ? '' : 's');
+        if (j.skipped) msg += ', ' + j.skipped + ' duplicate' + (j.skipped === 1 ? '' : 's') + ' skipped';
+        setDigiLogStatus(msg);
+    }).catch(function(e) {
+        setDigiLogStatus('Import failed: ' + e.message);
+    });
 }
 
 function initDigiHandlers() {
@@ -10486,21 +10819,10 @@ function initDigiHandlers() {
     // Load persisted settings
     var savedCall = window.App.callsign.get();
     var savedGrid = localStorage.getItem('digiGrid');
-    // Load shared QSO log (migrate from old 'digiQsoLog' key if needed)
-    var savedLog = localStorage.getItem('qsoLog') || localStorage.getItem('digiQsoLog');
     var myCallEl = document.getElementById('digiMyCall');
     var gridEl = document.getElementById('digiGrid');
     if (savedCall && myCallEl) myCallEl.value = savedCall;
     if (savedGrid && gridEl) gridEl.value = savedGrid;
-    if (savedLog) {
-        try {
-            qsoLog = JSON.parse(savedLog);
-            renderDigiLog();
-            // Migrate old key
-            localStorage.setItem('qsoLog', JSON.stringify(qsoLog));
-            try { localStorage.removeItem('digiQsoLog'); } catch(e2) {}
-        } catch(e) {}
-    }
 
     // Persist MY call and grid on change; rebuild msg rows on change
     if (myCallEl) {
@@ -10642,6 +10964,16 @@ function initDigiHandlers() {
     var settingsCloseBtn = document.getElementById('digiSettingsCloseBtn');
     if (settingsCloseBtn) {
         settingsCloseBtn.addEventListener('click', function() {
+            var wsx = {
+                enabled: !!(document.getElementById('digiWsjtxEnable') || {}).checked,
+                target: ((document.getElementById('digiWsjtxTarget') || {}).value || '').trim(),
+                decodes: !!(document.getElementById('digiWsjtxDecodes') || {}).checked
+            };
+            if (!wsjtxSettings || wsx.enabled !== wsjtxSettings.enabled ||
+                wsx.target !== wsjtxSettings.target || wsx.decodes !== wsjtxSettings.decodes) {
+                wsjtxSettings = wsx;
+                send({ cmd: 'setWsjtx', enabled: wsx.enabled, target: wsx.target, decodes: wsx.decodes });
+            }
             document.getElementById('digiSettingsModal').classList.remove('visible');
             updateDigiMsgRows();
         });
@@ -10668,13 +11000,30 @@ function initDigiHandlers() {
     var addQsoBtn = document.getElementById('digiAddQsoBtn');
     if (addQsoBtn) { addQsoBtn.addEventListener('click', addDigiQso); }
 
-    // Download ADIF button
+    // "Log management" menu: downloads and import
+    var logMenuBtn = document.getElementById('digiLogMenuBtn');
+    var logMenu = document.getElementById('digiLogMenu');
+    function showLogMenu(open) {
+        if (!logMenu || !logMenuBtn) return;
+        logMenu.hidden = !open;
+        logMenuBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    }
+    if (logMenuBtn && logMenu) {
+        logMenuBtn.addEventListener('click', function(e) { e.stopPropagation(); showLogMenu(logMenu.hidden); });
+        logMenu.addEventListener('click', function(e) { e.stopPropagation(); });
+        document.addEventListener('click', function() { showLogMenu(false); });
+        document.addEventListener('keydown', function(e) { if (e.key === 'Escape') showLogMenu(false); });
+    }
     var adifBtn = document.getElementById('digiAdifBtn');
-    if (adifBtn) { adifBtn.addEventListener('click', downloadAdif); }
-
-    // Clear log button
-    var clearLogBtn = document.getElementById('digiClearLogBtn');
-    if (clearLogBtn) { clearLogBtn.addEventListener('click', clearDigiLog); }
+    if (adifBtn) { adifBtn.addEventListener('click', function() { showLogMenu(false); downloadAdif(); }); }
+    var adifNewBtn = document.getElementById('digiAdifNewBtn');
+    if (adifNewBtn) { adifNewBtn.addEventListener('click', function() { showLogMenu(false); downloadNewQsos(); }); }
+    var adifImportBtn = document.getElementById('digiAdifImportBtn');
+    var adifFile = document.getElementById('digiAdifFile');
+    if (adifImportBtn && adifFile) {
+        adifImportBtn.addEventListener('click', function() { showLogMenu(false); adifFile.value = ''; adifFile.click(); });
+        adifFile.addEventListener('change', function() { importAdif(adifFile.files && adifFile.files[0]); });
+    }
 
     // Enter key in log edit row → save if callsign is not empty
     var logRows = document.getElementById('digiLogRows');

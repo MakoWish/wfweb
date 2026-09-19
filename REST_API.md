@@ -61,6 +61,99 @@ All responses are JSON objects.
 
 ## Endpoints
 
+### Server logbook
+
+The server is the source of truth for the station logbook. It is a plain ADIF
+file, `<data directory>/logbook.adi` by default; set `Logbook=` in the
+settings file or pass `--logbook <file>` to choose another path (a relative
+path in a named profile resolves next to that profile). Adds append one
+record; edits and deletes rewrite the file atomically. On its first
+connection a browser that still holds the old browser-local log merges it
+into the server log once.
+
+The log is never returned whole. `GET` pages newest-first with a cursor so a
+lifetime log stays cheap for the browser and the server alike.
+
+| Method | Endpoint | Action |
+|---|---|---|
+| `GET` | `/api/v1/logbook?limit=100&before=<cursor>&call=<CALL>` | Page of entries, newest first |
+| `POST` | `/api/v1/logbook` | Add an entry from a JSON QSO object |
+| `DELETE` | `/api/v1/logbook` | Clear the whole log (the previous file is kept as `logbook.adi.<timestamp>.bak`) |
+| `PUT` | `/api/v1/logbook/{id}` | Replace an entry (the id is kept) |
+| `DELETE` | `/api/v1/logbook/{id}` | Delete an entry |
+| `GET` | `/api/v1/logbook/adif` | Download the complete ADIF file |
+| `GET` | `/api/v1/logbook/adif?new=1` | Only the QSOs not yet exported, as plain ADIF (no `APP_WFWEB_*` fields) |
+| `GET` | `/api/v1/logbook/export` | `{"count","ids":[...],"adif":"..."}`: the same document plus the ids it contains |
+| `POST` | `/api/v1/logbook/exported` | `{"ids":[...]}`: stamp those QSOs as exported |
+| `POST` | `/api/v1/logbook/adif` | Import an ADIF document (body = the file); duplicates are skipped |
+
+`GET /api/v1/logbook` returns `{ "entries": [...], "total": N, "next": "<cursor>" }`.
+`limit` defaults to 100 (max 1000). Pass the returned `next` as `before` to
+fetch the following, older page; it is absent on the last page. `call`
+restricts the page to one callsign (case-insensitive), which is how a
+"worked before" lookup is done against a large log. `total` is always the
+size of the whole log.
+
+A QSO object carries `date` (YYYYMMDD), `time` (HHMMSS), `call`, `freq` (Hz),
+`band`, `mode`, `grid` (own), `theirGrid`, `rstSent`, `rstRcvd`, and
+optionally `comment`, `name`, `df`, `exported`. Only `call` is required.
+
+**Export bookkeeping.** Each record carries an export stamp
+(`APP_WFWEB_EXPORTED`, UTC `yyyyMMddTHHmmssZ`) once it has been included in
+a "new QSOs" download; records without one are *new*, and every list and
+event reports their number as `unexported`. The flow is two-step so that a
+QSO logged while a download is in flight is never skipped: `GET
+/api/v1/logbook/export` returns the new records as plain ADIF together with
+their ids, the client saves the file, then `POST /api/v1/logbook/exported`
+with those ids; the reply is `{"marked":n,"unexported":m}`. The full
+download keeps wfweb's `APP_WFWEB_*` fields so it restores faithfully; the
+new-QSOs document omits them, since it is meant for other services. `POST
+/api/v1/logbook/adif` imports records as already exported (they come from a
+log that handled its own uploads) unless called with `?new=1`; its reply is
+`{"added","skipped","total","unexported"}`. Editing a record keeps its stamp.
+
+Every change made through REST or the web UI is broadcast to all connected
+browsers as a delta:
+
+```json
+{"type":"qsoAdded","qso":{...},"count":N}
+{"type":"qsoUpdated","qso":{...}}
+{"type":"qsoDeleted","id":"...","count":N}
+{"type":"logbook","count":N,"unexported":M,"persistent":true}   // whole-log change: reload page 1
+```
+
+Browsers log through the WebSocket with `qsoLogged {qso}`, `updateQso {id,qso}`
+and `deleteQso {id}`, and hand over a pre-server browser log with
+`mergeLogbook {entries}`; the server applies the same validation and emits
+the same deltas (each carrying `count` and `unexported`). `mergeLogbook` is
+answered with `{"type":"logbookMerged","added":n,"total":N,"unexported":m,"persistent":bool}`.
+Clearing the log is deliberately not offered in the web UI; use the REST
+`DELETE`, which keeps the previous file as a `.bak`.
+
+`persistent` (also in `rigInfo.logbookPersistent` and on every `logbook`
+summary) is `false` when the server runs in a container and the logbook is
+not on a mounted volume, i.e. the file is lost when the container is
+recreated. Browsers then keep their own copy of what they log and re-send it
+on every connect, and warn the operator in the log panel.
+
+### WSJT-X UDP
+
+Completed contacts can also be emitted using the standard WSJT-X UDP
+protocol, so GridTracker, JTAlert, Log4OM, CQRLOG, N1MM and similar consume
+them without any wfweb-specific code. The server sends Heartbeat (every 15 s),
+Status, QSO Logged and Logged ADIF (both, as WSJT-X does), optionally Decode,
+and Close at shutdown. QSO messages fire from the server-side commit, so a
+manual SSB or CW entry goes out the same way an FT8 contact does.
+
+Configure with `--wsjtx <host[:port]>` (default port 2237, implies enable),
+`--no-wsjtx` (wins over the settings file) and `--wsjtx-decodes`, or with the
+matching Station Settings controls in the web UI (`setWsjtx
+{enabled,target,decodes}` over the WebSocket). Off by default. The target may
+be a multicast group such as `239.255.0.0:2237`, which is what you need when
+more than one listener runs on the same machine. The client id is `wfweb`,
+or `wfweb - <name>` when `-n` is set. In Docker, use the host's LAN address
+for unicast; multicast generally requires host networking.
+
 ### GET /api/v1/radio
 
 Full combined info + status.

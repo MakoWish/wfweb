@@ -227,6 +227,10 @@ int main(int argc, char *argv[])
         "  --no-autoconnect        Start without connecting to the rig (LAN only; connect\n"
         "                          later with the web UI Reconnect button). Also enabled\n"
         "                          by setting WFWEB_NO_AUTOCONNECT=1 in the environment\n"
+        "  --logbook <file>        QSO logbook (ADIF; default: <data dir>/logbook.adi)\n"
+        "  --wsjtx <host[:port]>   Send WSJT-X UDP messages (default port 2237)\n"
+        "  --no-wsjtx              Disable WSJT-X UDP even if enabled in settings\n"
+        "  --wsjtx-decodes         Also forward FT8/FT4 decodes\n"
         "  -l --logfile <file>     Log file\n"
         "  -b --background         Run as daemon (not Windows)\n"
         "  -d --debug [file]       Enable verbose debug logging (optionally to file)\n"
@@ -429,6 +433,18 @@ int main(int argc, char *argv[])
             if (argc > c + 1) { overrides.lanIP = argv[++c]; }
             else { std::cout << "Error: --lan requires IP address\n"; return -1; }
         }
+        else if (currentArg == "--logbook")
+        {
+            if (argc > c + 1) overrides.logbook = argv[++c];
+            else { std::cout << "Error: --logbook requires a file\n"; return -1; }
+        }
+        else if (currentArg == "--wsjtx")
+        {
+            if (argc > c + 1) overrides.wsjtxTarget = argv[++c];
+            else { std::cout << "Error: --wsjtx requires host[:port]\n"; return -1; }
+        }
+        else if (currentArg == "--no-wsjtx") overrides.noWsjtx = true;
+        else if (currentArg == "--wsjtx-decodes") overrides.wsjtxDecodes = true;
         else if (currentArg == "--lan-control")
         {
             if (argc > c + 1) { overrides.controlPort = QString(argv[++c]).toInt(); }

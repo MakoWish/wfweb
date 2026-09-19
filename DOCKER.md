@@ -185,17 +185,33 @@ The REST port is always web port + 1.
 
 ## Persistent Configuration
 
-The container stores settings in `/root/.config/wfweb/wfweb.conf`. To persist
-configuration across container restarts, mount a volume:
+The image points Qt's configuration and data roots at a single `/data`
+directory, so one volume persists everything: the settings file
+(`/data/wfweb/wfweb.conf`), the TLS certificate and the ADIF logbook (both
+under `/data/wfweb/wfweb/`).
 
 ```bash
 docker run --rm -it \
-  -v wfview-config:/root/.config/wfweb \
+  -v wfweb-data:/data \
   --device /dev/ttyUSB0 \
   --device /dev/snd --group-add audio \
   -p 8080:8080 -p 8081:8081 \
   k1fm/wfweb
 ```
+
+> **Upgrading from an image before the logbook:** settings used to live at
+> `/root/.config/wfweb/wfweb.conf`. If you had a volume mounted there, copy
+> the file to `/data/wfweb/wfweb.conf` in the new volume (or simply re-enter
+> your settings in the web UI once).
+
+> **The QSO log now lives on the server.** Earlier releases kept it in each
+> browser, so an ephemeral container was harmless. With this release every
+> browser hands its log to the server on first connect. **Mount a volume at
+> `/data`** or that log lives only as long as the container does. wfweb
+> detects a container without a volume: it warns in its log and in the web
+> UI's log panel, and browsers then keep their own copy of what they log and
+> re-send it on every connect, so nothing is lost as long as you keep using
+> the same browsers, but a proper volume is the real fix.
 
 You can also supply a pre-made settings file:
 
@@ -230,8 +246,8 @@ and `--manufacturer <id>` directly.
 > automatically from its install's `rigs/` directory based on the radio
 > it detects on the bus.
 
-The TLS certificate is stored in `/root/.local/share/wfweb/wfweb/`. Mount that
-path too if you want to persist or supply your own certificate.
+To supply your own TLS certificate, place `wfweb-web.crt` and `wfweb-web.key`
+under `/data/wfweb/wfweb/` in the volume.
 
 ---
 
@@ -261,6 +277,10 @@ Server:
   --rigctld-port <port>   Enable Hamlib rigctld TCP server (default off)
   --rigctld-bind-all      Bind rigctld to all interfaces (default localhost)
   --no-rigctld            Disable rigctld even if enabled in settings
+  --logbook <file>        ADIF logbook path (default /data/wfweb/wfweb/logbook.adi)
+  --wsjtx <host[:port]>   Emit WSJT-X UDP messages (default port 2237)
+  --no-wsjtx              Disable configured WSJT-X UDP output
+  --wsjtx-decodes         Also emit FT8/FT4 Decode messages
 
 Audio:
   --audio-system <id>     Audio backend (0=Qt, 1=PortAudio, 2=RtAudio)
@@ -306,11 +326,11 @@ services:
     group_add:
       - audio
     volumes:
-      - wfview-config:/root/.config/wfweb
+      - wfweb-data:/data
     command: ["--serial-port", "/dev/ttyUSB0"]
 
 volumes:
-  wfview-config:
+  wfweb-data:
 ```
 
 For LAN mode:
@@ -324,7 +344,7 @@ services:
       - "8080:8080"
       - "8081:8081"
     volumes:
-      - wfview-config:/root/.config/wfweb
+      - wfweb-data:/data
     command:
       - "--lan"
       - "192.168.1.100"
@@ -334,7 +354,7 @@ services:
       - "secret"
 
 volumes:
-  wfview-config:
+  wfweb-data:
 ```
 
 ---
