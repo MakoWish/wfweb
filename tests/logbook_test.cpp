@@ -154,6 +154,9 @@ int main()
         require(lb.find(newest.id)->exported.size() == 16, "export: stamp format yyyyMMddTHHmmssZ");
         require(lb.markExported({newest.id}) == 0, "export: idempotent");
         require(Logbook::parseAdif(lb.toAdif(true)).size() == 2, "export: toAdif(true) excludes it");
+        const QByteArray clean = lb.toAdif(true, false);
+        require(!clean.contains("APP_WFWEB") && Logbook::parseAdif(clean).size() == 2, "export: appFields=false strips the bookkeeping");
+        require(lb.unexportedIds().size() == 2 && !lb.unexportedIds().contains(newest.id), "export: unexportedIds");
         Logbook again;
         again.open(path);
         require(again.unexportedCount() == 2 && again.find(newest.id)->exported == lb.find(newest.id)->exported, "export: stamp persisted in APP_WFWEB_EXPORTED");

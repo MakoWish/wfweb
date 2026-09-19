@@ -912,10 +912,12 @@ void webServer::handleRestRequest(QTcpSocket *socket, const QString &method,
     // so a lifetime log stays cheap for the browser and the Pi alike.
     if (p == "/api/v1/logbook/adif") {
         if (method == "GET") {
-            // ?new=1: only records without an export stamp.  The client
-            // confirms what it saved via POST /api/v1/logbook/exported.
+            // ?new=1: only records without an export stamp, as plain ADIF
+            // without wfweb's own fields (a file for other services).  A
+            // client that wants to confirm the export uses /export instead,
+            // which also returns the ids.
             if (query.queryItemValue("new") == "1") {
-                sendHttpResponse(socket, 200, "OK", "application/x-adif; charset=utf-8", logbook_.toAdif(true));
+                sendHttpResponse(socket, 200, "OK", "application/x-adif; charset=utf-8", logbook_.toAdif(true, false));
                 return;
             }
             QFile file(logbook_.path());
@@ -944,6 +946,19 @@ void webServer::handleRestRequest(QTcpSocket *socket, const QString &method,
         } else {
             sendRestResponse(socket, 405, QJsonObject{{"error", "Method not allowed"}});
         }
+        return;
+    }
+    if (p == "/api/v1/logbook/export") {
+        // The "download new QSOs" document plus the ids it contains, taken
+        // together so the client can confirm exactly what it saved.
+        if (method != "GET") {
+            sendRestResponse(socket, 405, QJsonObject{{"error", "Method not allowed"}});
+            return;
+        }
+        const QStringList ids = logbook_.unexportedIds();
+        sendRestResponse(socket, 200, QJsonObject{{"count", ids.size()},
+                                                 {"ids", QJsonArray::fromStringList(ids)},
+                                                 {"adif", QString::fromUtf8(logbook_.toAdif(true, false))}});
         return;
     }
     if (p == "/api/v1/logbook/exported") {

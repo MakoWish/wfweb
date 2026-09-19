@@ -166,13 +166,19 @@ def test_logbook_export_bookkeeping(rest_url):
     b = requests.post(base, json=_qso("K2NEW", "20260918", "110000"), timeout=5).json()
     assert requests.get(base, timeout=5).json()["unexported"] == 2
     new = requests.get(f"{base}/adif", params={"new": 1}, timeout=5).text
-    assert new.count("<EOR>") == 2 and "<APP_WFWEB_EXPORTED" not in new
+    assert new.count("<EOR>") == 2 and "APP_WFWEB" not in new   # plain ADIF for other services
+
+    # The JSON export carries the same clean document plus the ids to confirm.
+    exp = requests.get(f"{base}/export", timeout=5).json()
+    assert exp["count"] == 2 and sorted(exp["ids"]) == sorted([a["id"], b["id"]])
+    assert exp["adif"] == new
 
     # Confirm only one of them: the other stays new.
     r = requests.post(f"{base}/exported", json={"ids": [a["id"], "no-such-id"]}, timeout=5).json()
     assert r == {"marked": 1, "unexported": 1}
     new = requests.get(f"{base}/adif", params={"new": 1}, timeout=5).text
     assert new.count("<EOR>") == 1 and "K2NEW" in new
+    assert requests.get(f"{base}/export", timeout=5).json()["ids"] == [b["id"]]
     full = requests.get(f"{base}/adif", timeout=5).text
     assert full.count("<APP_WFWEB_EXPORTED:16>") == 1
 

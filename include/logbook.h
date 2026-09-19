@@ -34,7 +34,10 @@ struct QsoRecord {
     // Chronological sort key.  Entries without date/time sort first (oldest).
     QString sortKey() const { return date + time; }
     QJsonObject toJson() const;
-    QByteArray toAdif() const;   // one <...> record terminated by <EOR>\n
+    // One <...> record terminated by <EOR>\n.  appFields=false leaves out the
+    // APP_WFWEB_* bookkeeping (id, export stamp, digi offset) for files meant
+    // for other logging services.
+    QByteArray toAdif(bool appFields = true) const;
     // Whitelists and length-caps untrusted input; empty call => invalid record.
     static QsoRecord fromJson(const QJsonObject &in, const QString &id = QString());
     // Trim / upper-case / cap every field and mint an id; the single
@@ -99,7 +102,8 @@ public:
     // markExported() stamps the given ids (one rewrite) and returns how many
     // records changed.
     int unexportedCount() const;
-    QByteArray toAdif(bool unexportedOnly) const;
+    QByteArray toAdif(bool unexportedOnly, bool appFields = true) const;
+    QStringList unexportedIds() const;
     int markExported(const QStringList &ids);
 
     // Up to `limit` entries older than `before` (a cursor from a previous

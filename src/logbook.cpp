@@ -86,7 +86,7 @@ QJsonObject QsoRecord::toJson() const
     return o;
 }
 
-QByteArray QsoRecord::toAdif() const
+QByteArray QsoRecord::toAdif(bool appFields) const
 {
     QByteArray out;
     // ADIF lengths are in bytes, so measure the UTF-8 encoding, not QChars.
@@ -101,7 +101,7 @@ QByteArray QsoRecord::toAdif() const
         out += bytes;
         out += ' ';
     };
-    field("APP_WFWEB_ID", id);
+    if (appFields) field("APP_WFWEB_ID", id);
     field("CALL", call);
     field("QSO_DATE", date);
     field("TIME_ON", time);
@@ -115,9 +115,10 @@ QByteArray QsoRecord::toAdif() const
     field("MY_GRIDSQUARE", grid);
     field("COMMENT", comment);
     field("NAME", name);
-    if (df >= 0)
-        field("APP_WFWEB_DF", QString::number(df));
-    field("APP_WFWEB_EXPORTED", exported);
+    if (appFields) {
+        if (df >= 0) field("APP_WFWEB_DF", QString::number(df));
+        field("APP_WFWEB_EXPORTED", exported);
+    }
     out += "<EOR>\n";
     return out;
 }
@@ -488,13 +489,21 @@ int Logbook::unexportedCount() const
     return n;
 }
 
-QByteArray Logbook::toAdif(bool unexportedOnly) const
+QByteArray Logbook::toAdif(bool unexportedOnly, bool appFields) const
 {
     QByteArray out = adifHeader();
     for (const QsoRecord &r : records_)
         if (!unexportedOnly || r.exported.isEmpty())
-            out += r.toAdif();
+            out += r.toAdif(appFields);
     return out;
+}
+
+QStringList Logbook::unexportedIds() const
+{
+    QStringList ids;
+    for (const QsoRecord &r : records_)
+        if (r.exported.isEmpty()) ids.append(r.id);
+    return ids;
 }
 
 int Logbook::markExported(const QStringList &ids)

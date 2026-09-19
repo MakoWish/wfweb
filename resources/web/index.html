@@ -1312,7 +1312,7 @@ body.digi-open #bottomBar { grid-row: 5; }
     align-items: center;
     color: var(--mode-accent);
     font-family: var(--font-mono);
-    font-size: 13px;
+    font-size: var(--fs-md);
     font-weight: bold;
     border-bottom: 1px solid var(--mode-accent-dim);
     padding-bottom: 5px;
@@ -1324,49 +1324,71 @@ body.digi-open #bottomBar { grid-row: 5; }
     flex: 1;
     min-height: 80px;
     font-family: var(--font-mono);
-    font-size: 11px;
+    font-size: var(--fs-sm);
 }
+/* Text colors come from the theme tokens: the old #447-on-#000820 date
+   column and #224 empty-state text were close to invisible. */
 .digi-log-row {
     display: grid;
-    grid-template-columns: 72px 56px 72px 72px 36px 36px 44px 44px 20px 20px;
-    gap: 3px;
-    padding: 2px 4px;
-    border-bottom: 1px solid #011;
-    color: #5af;
+    grid-template-columns: 80px 50px 80px 72px 40px 40px 46px 46px 22px 22px;
+    gap: 4px;
+    padding: 3px 4px;
+    border-bottom: 1px solid #012;
+    color: var(--text);
     align-items: center;
 }
-.digi-log-row.header { color: #448; font-size: 10px; border-bottom: 1px solid #024; padding-top: 0; }
-.digi-log-date { color: #447; }
-.digi-log-time { color: #447; }
-.digi-log-call { color: #8cf; font-weight: bold; }
-.digi-log-freq { color: #5af; }
-.digi-log-band { color: var(--mode-accent-dim); }
+.digi-log-row.header { color: var(--text-dim); font-size: var(--fs-xs); border-bottom: 1px solid #024; padding-top: 0; }
+.digi-log-date { color: var(--text-dim); }
+.digi-log-time { color: var(--text-dim); }
+.digi-log-call { color: var(--text); font-weight: bold; }
+.digi-log-freq { color: #7bf; }
+.digi-log-band { color: var(--text-dim); }
 .digi-log-mode { color: var(--mode-accent); }
-.digi-log-rstsent { color: #5a5; }
-.digi-log-rstrcvd { color: #a55; }
-.digi-log-edit { color: #248; cursor: pointer; font-size: 13px; text-align: center; line-height: 1; }
+.digi-log-rstsent { color: #8d8; }
+.digi-log-rstrcvd { color: #e99; }
+.digi-log-edit { color: var(--text-dim); cursor: pointer; font-size: 16px; text-align: center; line-height: 1; }
 .digi-log-edit:hover { color: var(--mode-accent); }
-.digi-log-save { color: #262; cursor: pointer; font-size: 15px; text-align: center; line-height: 1; }
-.digi-log-save:hover { color: #4f4; }
-.digi-log-del { color: #844; cursor: pointer; font-size: 14px; text-align: center; line-height: 1; }
+.digi-log-save { color: #6d6; cursor: pointer; font-size: 17px; text-align: center; line-height: 1; }
+.digi-log-save:hover { color: var(--state-ok); }
+.digi-log-del { color: #d77; cursor: pointer; font-size: 16px; text-align: center; line-height: 1; }
 .digi-log-del:hover { color: var(--state-error); }
-.digi-log-empty { color: #224; font-style: italic; padding: 8px 4px; }
-.digi-log-warn { margin: 4px 0 6px; padding: 6px 8px; border: 1px solid var(--warning, #c90); color: var(--warning, #fc3); font-size: 11px; line-height: 1.4; }
-.digi-log-status { align-self: center; margin-left: auto; font-size: 10px; color: #8cf; }
-.digi-log-more { display: flex; justify-content: center; align-items: center; gap: 10px; padding: 6px 4px; color: #556; font-size: 10px; }
+.digi-log-empty { color: var(--text-dim); font-style: italic; padding: 10px 4px; }
+.digi-log-warn { margin: 4px 0 6px; padding: 6px 8px; border: 1px solid var(--state-warn); color: var(--state-warn); font-size: var(--fs-sm); line-height: 1.4; }
+.digi-log-status { font-size: var(--fs-sm); color: var(--text-dim); }
+.digi-log-more { display: flex; justify-content: center; align-items: center; gap: 10px; padding: 6px 4px; color: var(--text-dim); font-size: var(--fs-sm); }
 .digi-log-input {
-    background: #001828; border: 1px solid var(--mode-accent-dim); color: #8cf;
-    font-family: var(--font-mono); font-size: 10px;
-    width: 100%; box-sizing: border-box; padding: 1px 2px;
+    background: #001828; border: 1px solid var(--mode-accent-dim); color: var(--text);
+    font-family: var(--font-mono); font-size: var(--fs-sm);
+    width: 100%; box-sizing: border-box; padding: 2px 3px;
 }
+/* "Add QSO" alone on the left; everything that manages the log file on the
+   right, behind one menu, so a logging action never sits next to a
+   download/import one. */
 .digi-log-actions {
     display: flex;
+    justify-content: space-between;
+    align-items: center;
     gap: 8px;
     margin-top: 8px;
     padding-top: 6px;
     border-top: 1px solid #024;
     flex-wrap: wrap;
 }
+.digi-log-manage { position: relative; display: flex; align-items: center; gap: 10px; margin-left: auto; }
+.digi-log-menu {
+    position: absolute; right: 0; bottom: calc(100% + 4px); min-width: 280px;
+    background: #000c2a; border: 1px solid var(--mode-accent-dim); border-radius: var(--radius);
+    box-shadow: 0 4px 16px rgba(0,0,0,0.6); padding: 4px; z-index: 5;
+}
+.digi-log-menu[hidden] { display: none; }
+.digi-log-menu button {
+    display: block; width: 100%; text-align: left; background: none; border: none;
+    color: var(--text); font-family: var(--font-mono); font-size: var(--fs-sm);
+    padding: 7px 10px; cursor: pointer; border-radius: 3px;
+}
+.digi-log-menu button:hover:not(:disabled) { background: var(--mode-accent-bg); color: var(--mode-accent); }
+.digi-log-menu button:disabled { color: var(--text-faint); cursor: default; }
+.digi-log-menu .hint { display: block; font-size: var(--fs-xs); color: var(--text-dim); margin-top: 2px; }
 .digi-log-action-btn {
     padding: 3px 12px;
     background: var(--mode-accent-bg);
@@ -2042,7 +2064,7 @@ body.digi-open #bottomBar { grid-row: 5; }
     #modeBtn { padding: 3px 5px; font-size: 11px; letter-spacing: 0; white-space: nowrap; }
     /* QSO log: the 10-column grid is ~500px wide. On a phone drop Band
        and both RST columns (band is implied by freq) and let Call flex. */
-    .digi-log-row { grid-template-columns: 54px 44px minmax(40px, 1fr) 58px 30px 18px 18px; gap: 2px; font-size: 9px; }
+    .digi-log-row { grid-template-columns: 58px 44px minmax(44px, 1fr) 60px 34px 20px 20px; gap: 3px; font-size: 11px; }
     .digi-log-row .digi-log-call { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .digi-log-band, .digi-log-rstsent, .digi-log-rstrcvd, #dleBand, #dleRstSent, #dleRstRcvd { display: none; }
     /* FreeDV readout is right-anchored and ~470px wide; let it wrap onto
@@ -2498,11 +2520,19 @@ body.digi-open #bottomBar { grid-row: 5; }
             </div>
             <div class="digi-log-actions">
                 <button id="digiAddQsoBtn" class="digi-log-action-btn">&#10010; Add QSO</button>
-                <button id="digiAdifNewBtn" class="digi-log-action-btn" title="Download the QSOs added since the last download">&#11123; New QSOs</button>
-                <button id="digiAdifBtn" class="digi-log-action-btn" title="Download the whole logbook">&#11123; All QSOs</button>
-                <button id="digiAdifImportBtn" class="digi-log-action-btn" title="Merge an ADIF file into the logbook; duplicates are skipped">&#11121; Import ADIF</button>
-                <input type="file" id="digiAdifFile" accept=".adi,.adif,.txt" hidden>
-                <span id="digiLogStatus" class="digi-log-status"></span>
+                <div class="digi-log-manage">
+                    <span id="digiLogStatus" class="digi-log-status"></span>
+                    <button id="digiLogMenuBtn" class="digi-log-action-btn" aria-haspopup="true" aria-expanded="false">Log management &#9662;</button>
+                    <div id="digiLogMenu" class="digi-log-menu" hidden>
+                        <button id="digiAdifNewBtn">&#11123; Download new QSOs <span id="digiAdifNewCount"></span>
+                            <span class="hint">Only the QSOs not included in a previous download</span></button>
+                        <button id="digiAdifBtn">&#11123; Download the full logbook
+                            <span class="hint">Every QSO, as stored on the server (ADIF)</span></button>
+                        <button id="digiAdifImportBtn">&#11121; Import an ADIF file&hellip;
+                            <span class="hint">Merged into the logbook; duplicates are skipped</span></button>
+                    </div>
+                    <input type="file" id="digiAdifFile" accept=".adi,.adif,.txt" hidden>
+                </div>
             </div>
         </div>
 
@@ -10515,11 +10545,10 @@ function digiLogRowEl(i) {
 function updateDigiLogFooter() {
     var countEl = document.getElementById('digiLogCount');
     if (countEl) countEl.textContent = logbookTotal ? '(' + logbookTotal + ')' : '';
+    var newCount = document.getElementById('digiAdifNewCount');
+    if (newCount) newCount.textContent = '(' + logbookUnexported + ')';
     var newBtn = document.getElementById('digiAdifNewBtn');
-    if (newBtn) {
-        newBtn.innerHTML = '&#11123; New QSOs (' + logbookUnexported + ')';
-        newBtn.disabled = !logbookUnexported;
-    }
+    if (newBtn) newBtn.disabled = !logbookUnexported;
     var more = document.getElementById('digiLogMore');
     if (!more) return;
     if (logbookNext) {
@@ -10699,29 +10728,40 @@ function saveAdifFile(text, suffix) {
     URL.revokeObjectURL(a.href);
 }
 
-// Download the logbook as ADIF: everything, or only the QSOs without an
-// export stamp.  For the latter the browser reports back exactly the ids it
-// received once the file is saved, so the server stamps those and nothing
-// logged in the meantime.
-function downloadAdif(newOnly) {
-    newOnly = newOnly === true;
-    var url = '/api/v1/logbook/adif' + (newOnly ? '?new=1' : '');
+// Download the full logbook file (a faithful copy of what the server
+// stores, wfweb bookkeeping fields included, so it restores cleanly).
+function downloadAdif() {
     setDigiLogStatus('Preparing download\u2026');
-    return fetch(url, { cache: 'no-store' }).then(function(r) {
+    return fetch('/api/v1/logbook/adif', { cache: 'no-store' }).then(function(r) {
         if (!r.ok) throw new Error('HTTP ' + r.status);
         return r.text();
     }).then(function(text) {
-        var ids = [];
-        var re = /<APP_WFWEB_ID:\d+>([^\s<]+)/g, m;
-        while ((m = re.exec(text))) ids.push(m[1]);
-        if (newOnly && !ids.length) { setDigiLogStatus('No new QSOs to download'); return; }
-        saveAdifFile(text, newOnly ? '_new' : '');
-        if (!newOnly) { setDigiLogStatus('Downloaded ' + ids.length + ' QSOs'); return; }
+        saveAdifFile(text, '');
+        setDigiLogStatus('Downloaded the full logbook (' + logbookTotal + ' QSOs)');
+    }).catch(function(e) {
+        setDigiLogStatus('Download failed: ' + e.message);
+    });
+}
+
+// Download only the QSOs not yet exported, as plain ADIF without wfweb's
+// own fields (this file is meant for other logging services).  The server
+// returns the document together with the ids it contains; once the file is
+// saved the browser confirms exactly those ids, so a QSO logged in the
+// meantime stays "new" for the next download.
+function downloadNewQsos() {
+    setDigiLogStatus('Preparing download\u2026');
+    return fetch('/api/v1/logbook/export', { cache: 'no-store' }).then(function(r) {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.json();
+    }).then(function(j) {
+        var ids = Array.isArray(j.ids) ? j.ids : [];
+        if (!ids.length) { setDigiLogStatus('No new QSOs to download'); return; }
+        saveAdifFile(j.adif || '', '_new');
         return fetch('/api/v1/logbook/exported', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ ids: ids })
-        }).then(function(r) { return r.json(); }).then(function(j) {
-            logbookUnexported = j.unexported || 0;
+        }).then(function(r) { return r.json(); }).then(function(k) {
+            logbookUnexported = k.unexported || 0;
             updateDigiLogFooter();
             setDigiLogStatus('Downloaded ' + ids.length + ' new QSO' + (ids.length === 1 ? '' : 's'));
         });
@@ -10960,15 +11000,28 @@ function initDigiHandlers() {
     var addQsoBtn = document.getElementById('digiAddQsoBtn');
     if (addQsoBtn) { addQsoBtn.addEventListener('click', addDigiQso); }
 
-    // ADIF download (all / new) and import
+    // "Log management" menu: downloads and import
+    var logMenuBtn = document.getElementById('digiLogMenuBtn');
+    var logMenu = document.getElementById('digiLogMenu');
+    function showLogMenu(open) {
+        if (!logMenu || !logMenuBtn) return;
+        logMenu.hidden = !open;
+        logMenuBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    }
+    if (logMenuBtn && logMenu) {
+        logMenuBtn.addEventListener('click', function(e) { e.stopPropagation(); showLogMenu(logMenu.hidden); });
+        logMenu.addEventListener('click', function(e) { e.stopPropagation(); });
+        document.addEventListener('click', function() { showLogMenu(false); });
+        document.addEventListener('keydown', function(e) { if (e.key === 'Escape') showLogMenu(false); });
+    }
     var adifBtn = document.getElementById('digiAdifBtn');
-    if (adifBtn) { adifBtn.addEventListener('click', function() { downloadAdif(false); }); }
+    if (adifBtn) { adifBtn.addEventListener('click', function() { showLogMenu(false); downloadAdif(); }); }
     var adifNewBtn = document.getElementById('digiAdifNewBtn');
-    if (adifNewBtn) { adifNewBtn.addEventListener('click', function() { downloadAdif(true); }); }
+    if (adifNewBtn) { adifNewBtn.addEventListener('click', function() { showLogMenu(false); downloadNewQsos(); }); }
     var adifImportBtn = document.getElementById('digiAdifImportBtn');
     var adifFile = document.getElementById('digiAdifFile');
     if (adifImportBtn && adifFile) {
-        adifImportBtn.addEventListener('click', function() { adifFile.value = ''; adifFile.click(); });
+        adifImportBtn.addEventListener('click', function() { showLogMenu(false); adifFile.value = ''; adifFile.click(); });
         adifFile.addEventListener('change', function() { importAdif(adifFile.files && adifFile.files[0]); });
     }
 

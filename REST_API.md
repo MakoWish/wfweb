@@ -82,7 +82,8 @@ lifetime log stays cheap for the browser and the server alike.
 | `PUT` | `/api/v1/logbook/{id}` | Replace an entry (the id is kept) |
 | `DELETE` | `/api/v1/logbook/{id}` | Delete an entry |
 | `GET` | `/api/v1/logbook/adif` | Download the complete ADIF file |
-| `GET` | `/api/v1/logbook/adif?new=1` | Download only the QSOs not yet exported |
+| `GET` | `/api/v1/logbook/adif?new=1` | Only the QSOs not yet exported, as plain ADIF (no `APP_WFWEB_*` fields) |
+| `GET` | `/api/v1/logbook/export` | `{"count","ids":[...],"adif":"..."}`: the same document plus the ids it contains |
 | `POST` | `/api/v1/logbook/exported` | `{"ids":[...]}`: stamp those QSOs as exported |
 | `POST` | `/api/v1/logbook/adif` | Import an ADIF document (body = the file); duplicates are skipped |
 
@@ -102,9 +103,11 @@ optionally `comment`, `name`, `df`, `exported`. Only `call` is required.
 a "new QSOs" download; records without one are *new*, and every list and
 event reports their number as `unexported`. The flow is two-step so that a
 QSO logged while a download is in flight is never skipped: `GET
-/api/v1/logbook/adif?new=1` returns the new records, the client saves the
-file, then `POST /api/v1/logbook/exported` with the `APP_WFWEB_ID`s it
-received; the reply is `{"marked":n,"unexported":m}`. `POST
+/api/v1/logbook/export` returns the new records as plain ADIF together with
+their ids, the client saves the file, then `POST /api/v1/logbook/exported`
+with those ids; the reply is `{"marked":n,"unexported":m}`. The full
+download keeps wfweb's `APP_WFWEB_*` fields so it restores faithfully; the
+new-QSOs document omits them, since it is meant for other services. `POST
 /api/v1/logbook/adif` imports records as already exported (they come from a
 log that handled its own uploads) unless called with `?new=1`; its reply is
 `{"added","skipped","total","unexported"}`. Editing a record keeps its stamp.
