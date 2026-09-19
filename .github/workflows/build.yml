@@ -392,6 +392,183 @@ jobs:
           path: wfweb_*-debian13_${{ matrix.deb_arch }}.deb
           retention-days: 30
 
+  build-linux-appimage:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            arch: x86_64
+          - os: ubuntu-24.04-arm
+            arch: aarch64
+
+    name: AppImage (${{ matrix.arch }})
+    runs-on: ${{ matrix.os }}
+    # Built on the oldest supported base so the bundle runs on anything with
+    # glibc >= 2.36 (Debian 12+, Ubuntu 24.04+, Fedora 37+, Arch, openSUSE...).
+    # Everything above glibc is bundled, including the desktop libraries
+    # linuxdeploy normally leaves out (see EXTRA_LIBS below). The host only
+    # provides ALSA (libasound2) and OpenSSL 3.
+    container: debian:bookworm
+
+    steps:
+      - name: Install git
+        run: |
+          apt-get update
+          apt-get install -y git
+
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          submodules: true
+
+      - name: Install dependencies
+        run: |
+          apt-get install -y \
+            qt5-qmake qtbase5-dev libqt5serialport5-dev \
+            qtmultimedia5-dev libqt5websockets5-dev \
+            libqt5multimedia5-plugins \
+            libopus-dev libeigen3-dev \
+            portaudio19-dev librtaudio-dev \
+            libhidapi-dev libudev-dev libpulse-dev \
+            libcodec2-dev \
+            build-essential cmake autoconf automake libtool curl file \
+            openssl
+
+      - name: Build RADE
+        run: |
+          cd resources/radae_nopy
+          mkdir -p build && cd build
+          cmake -DCMAKE_BUILD_TYPE=Release ..
+          make -j$(nproc)
+
+      - name: Build
+        run: |
+          qmake wfweb.pro PREFIX=/usr
+          make -j$(nproc)
+
+      - name: Get version
+        id: version
+        run: echo "version=$(grep '#define WFWEB_VERSION' include/wfweb_version.h | grep -oP '[\d.]+')" >> $GITHUB_OUTPUT
+
+      - name: Fetch linuxdeploy
+        run: |
+          curl -fsSL -O \
+            https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-${{ matrix.arch }}.AppImage
+          curl -fsSL -O \
+            https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-${{ matrix.arch }}.AppImage
+          # Static FUSE 3 runtime: the classic runtime needs libfuse2, which
+          # minimal server installs no longer ship.
+          curl -fsSL -o appimage-runtime \
+            https://github.com/AppImage/type2-runtime/releases/download/continuous/runtime-${{ matrix.arch }}
+          chmod +x linuxdeploy-*.AppImage
+
+      - name: Build AppImage
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: 1
+          ARCH: ${{ matrix.arch }}
+          EXTRA_PLATFORM_PLUGINS: libqoffscreen.so
+        run: |
+          VERSION=${{ steps.version.outputs.version }}
+          BRANCH_SAFE=$(echo "${{ github.ref_name }}" | sed 's/[^a-zA-Z0-9-]/-/g')
+          case "${{ github.ref }}" in
+            refs/tags/v*) DEV_SUFFIX="" ;;
+            *) DEV_SUFFIX="-dev-${BRANCH_SAFE}" ;;
+          esac
+
+          make install INSTALL_ROOT=$(pwd)/AppDir
+          # The unit file hardcodes /usr/local/bin; it means nothing inside the bundle
+          rm -rf AppDir/usr/lib/systemd
+          mkdir -p AppDir/usr/share/doc/wfweb
+          cp LICENSE THIRD_PARTY_LICENSES AppDir/usr/share/doc/wfweb/
+
+          cat > wfweb.desktop << EOF
+          [Desktop Entry]
+          Type=Application
+          Name=wfweb
+          Comment=Browser-based remote control for amateur radio transceivers
+          Exec=wfweb
+          Icon=wfweb
+          Terminal=true
+          Categories=Network;HamRadio;
+          EOF
+
+          # linuxdeploy leaves these to the host, assuming a desktop install.
+          # Headless hosts (Pi OS Lite, servers) lack them, and the binary
+          # hard-links them through Qt5Gui and RtAudio, so ship them too.
+          # ALSA stays host-provided: it is tied to the host's alsa.conf.
+          EXTRA_LIBS=""
+          for lib in libjack.so.0 libGL.so.1 libGLX.so.0 libGLdispatch.so.0 \
+                     libX11.so.6 libX11-xcb.so.1 libxcb.so.1 \
+                     libfreetype.so.6 libfontconfig.so.1 libharfbuzz.so.0 libglib-2.0.so.0 libexpat.so.1; do
+            EXTRA_LIBS="$EXTRA_LIBS --library /usr/lib/$(gcc -print-multiarch)/$lib"
+          done
+
+          export LD_LIBRARY_PATH=$(pwd)/resources/radae_nopy/build/src
+          export LDAI_RUNTIME_FILE=$(pwd)/appimage-runtime
+          export LDAI_OUTPUT=wfweb_${VERSION}${DEV_SUFFIX}-${{ matrix.arch }}.AppImage
+          PATH=$(pwd):$PATH ./linuxdeploy-${{ matrix.arch }}.AppImage \
+            --appdir AppDir \
+            --desktop-file wfweb.desktop \
+            --icon-file resources/web-standalone/favicon.svg --icon-filename wfweb \
+            $EXTRA_LIBS \
+            --plugin qt \
+            --output appimage
+
+      - name: Upload AppImage artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: wfweb-${{ matrix.arch }}-appimage
+          path: wfweb_*-${{ matrix.arch }}.AppImage
+          retention-days: 30
+
+  test-linux-appimage:
+    needs: build-linux-appimage
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            arch: x86_64
+          - os: ubuntu-24.04-arm
+            arch: aarch64
+
+    name: AppImage on a bare host (${{ matrix.arch }})
+    runs-on: ${{ matrix.os }}
+    # A bare Debian 12 with only the two host-provided libraries proves the
+    # bundle carries everything else. linuxdeploy's exclude list assumes a
+    # desktop host, so this is the check that catches a missing libjack/libGL.
+    container: debian:bookworm
+
+    steps:
+      - name: Download AppImage
+        uses: actions/download-artifact@v8
+        with:
+          name: wfweb-${{ matrix.arch }}-appimage
+
+      - name: Smoke test
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: 1
+          WFWEB_NO_AUTOCONNECT: 1
+        run: |
+          apt-get update
+          apt-get install -y libasound2 openssl curl
+          chmod +x wfweb_*.AppImage
+          ./wfweb_*.AppImage --version
+          # Boot the bundle headless: it must find its own rig files and bring
+          # up HTTPS with the bundled Qt and the host's OpenSSL 3.
+          # timeout signals the whole process group (runtime + wrapped app) on kill
+          HOME=$(mktemp -d) timeout 60 ./wfweb_*.AppImage -d -p 18080 > smoke.log 2>&1 &
+          PID=$!
+          ok=0
+          for i in $(seq 1 30); do
+            if curl -sk -o /dev/null https://127.0.0.1:18080/; then ok=1; break; fi
+            sleep 1
+          done
+          kill $PID || true; wait $PID || true
+          [ "$ok" = 1 ] || { cat smoke.log; echo "AppImage web server did not answer"; exit 1; }
+          grep -q "Found Rig" smoke.log || { cat smoke.log; echo "AppImage did not find its rig files"; exit 1; }
+
   build-macos:
     name: macOS (Apple Silicon)
     runs-on: macos-14
@@ -612,7 +789,7 @@ jobs:
 
   release:
     name: Publish release
-    needs: [build-linux-ubuntu2404, build-linux-debian12, build-linux-debian13, build-macos, build-windows]
+    needs: [build-linux-ubuntu2404, build-linux-debian12, build-linux-debian13, test-linux-appimage, build-macos, build-windows]
     runs-on: ubuntu-24.04
     if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     permissions:
@@ -635,6 +812,8 @@ jobs:
             wfweb-arm64-debian12-deb/*.deb
             wfweb-x86_64-debian13-deb/*.deb
             wfweb-arm64-debian13-deb/*.deb
+            wfweb-x86_64-appimage/*.AppImage
+            wfweb-aarch64-appimage/*.AppImage
             wfweb-macos-arm64/wfweb*-macos-arm64.zip
             wfweb-windows-x86_64/wfweb*-windows-x86_64.zip
           generate_release_notes: ${{ startsWith(github.ref, 'refs/tags/v') }}
