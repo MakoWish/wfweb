@@ -1352,6 +1352,7 @@ body.digi-open #bottomBar { grid-row: 5; }
 .digi-log-del:hover { color: var(--state-error); }
 .digi-log-empty { color: #224; font-style: italic; padding: 8px 4px; }
 .digi-log-warn { margin: 4px 0 6px; padding: 6px 8px; border: 1px solid var(--warning, #c90); color: var(--warning, #fc3); font-size: 11px; line-height: 1.4; }
+.digi-log-status { align-self: center; margin-left: auto; font-size: 10px; color: #8cf; }
 .digi-log-more { display: flex; justify-content: center; align-items: center; gap: 10px; padding: 6px 4px; color: #556; font-size: 10px; }
 .digi-log-input {
     background: #001828; border: 1px solid var(--mode-accent-dim); color: #8cf;
@@ -2497,8 +2498,11 @@ body.digi-open #bottomBar { grid-row: 5; }
             </div>
             <div class="digi-log-actions">
                 <button id="digiAddQsoBtn" class="digi-log-action-btn">&#10010; Add QSO</button>
-                <button id="digiAdifBtn" class="digi-log-action-btn">&#11123; Download ADIF</button>
-                <button id="digiClearLogBtn" class="digi-log-action-btn danger">&#10005; Clear Log</button>
+                <button id="digiAdifNewBtn" class="digi-log-action-btn" title="Download the QSOs added since the last download">&#11123; New QSOs</button>
+                <button id="digiAdifBtn" class="digi-log-action-btn" title="Download the whole logbook">&#11123; All QSOs</button>
+                <button id="digiAdifImportBtn" class="digi-log-action-btn" title="Merge an ADIF file into the logbook; duplicates are skipped">&#11121; Import ADIF</button>
+                <input type="file" id="digiAdifFile" accept=".adi,.adif,.txt" hidden>
+                <span id="digiLogStatus" class="digi-log-status"></span>
             </div>
         </div>
 
@@ -2990,6 +2994,8 @@ var logbookTotal = 0;       // QSOs on the server
 var logbookNext = '';       // cursor for the next (older) page, '' at the end
 var logbookLoading = false;
 var logbookPersistent = true;   // false: the server's file dies with its container; keep a copy here
+var logbookUnexported = 0;      // QSOs without an export stamp ("Download new" candidates)
+var digiLogStatusTimer = null;
 var wsjtxSettings = null;   // last values received from the server, to send only changes
 var digiLogEditIdx = -1; // index of row currently being edited, -1 = none
 var digiHashBook = null;
@@ -3357,6 +3363,7 @@ function handleMessage(msg) {
             // Summary only (on connect, and after clear / merge / import):
             // the log is paged over REST, so reload the first page.
             logbookTotal = msg.count || 0;
+            if (msg.unexported !== undefined) logbookUnexported = msg.unexported;
             if (msg.persistent !== undefined) { logbookPersistent = !!msg.persistent; updateDigiLogWarning(); }
             loadLogbookPage(true);
             migrateBrowserLog();
@@ -3368,9 +3375,11 @@ function handleMessage(msg) {
             if (msg.persistent) {
                 try { localStorage.removeItem('qsoLog'); localStorage.removeItem('digiQsoLog'); } catch(e) {}
             }
+            if (msg.unexported !== undefined) { logbookUnexported = msg.unexported; updateDigiLogFooter(); }
             break;
         case 'qsoAdded': {
             if (msg.count !== undefined) logbookTotal = msg.count;
+            if (msg.unexported !== undefined) logbookUnexported = msg.unexported;
             var ai = insertQsoSorted(msg.qso);
             if (ai >= 0) insertDigiLogRow(ai); else updateDigiLogFooter();
             break;
@@ -3389,6 +3398,7 @@ function handleMessage(msg) {
         }
         case 'qsoDeleted': {
             if (msg.count !== undefined) logbookTotal = msg.count;
+            if (msg.unexported !== undefined) logbookUnexported = msg.unexported;
             var di = findQsoIdx(msg.id);
             if (di >= 0) {
                 if (digiLogEditIdx === di) digiLogEditIdx = -1;
@@ -10505,6 +10515,11 @@ function digiLogRowEl(i) {
 function updateDigiLogFooter() {
     var countEl = document.getElementById('digiLogCount');
     if (countEl) countEl.textContent = logbookTotal ? '(' + logbookTotal + ')' : '';
+    var newBtn = document.getElementById('digiAdifNewBtn');
+    if (newBtn) {
+        newBtn.innerHTML = '&#11123; New QSOs (' + logbookUnexported + ')';
+        newBtn.disabled = !logbookUnexported;
+    }
     var more = document.getElementById('digiLogMore');
     if (!more) return;
     if (logbookNext) {
@@ -10665,50 +10680,73 @@ function deleteDigiQso(idx) {
     removeDigiLogRow(idx);
 }
 
-// Fetch the whole ADIF file from the server and save it under the same
-// wfweb_<CALL>_<timestamp>.adi name as before.  Returns a promise so Clear
-// can wait for the download to land before wiping anything.
-function downloadAdif() {
-    return fetch('/api/v1/logbook/adif', { cache: 'no-store' }).then(function(r) {
+function setDigiLogStatus(text) {
+    var el = document.getElementById('digiLogStatus');
+    if (!el) return;
+    el.textContent = text || '';
+    clearTimeout(digiLogStatusTimer);
+    if (text) digiLogStatusTimer = setTimeout(function() { el.textContent = ''; }, 8000);
+}
+
+function saveAdifFile(text, suffix) {
+    var iso = new Date().toISOString();
+    var ts = iso.substr(0, 10).replace(/-/g, '') + '_' + iso.substr(11, 8).replace(/:/g, '');
+    var myCall = ((document.getElementById('digiMyCall') || {}).value || '').toUpperCase().replace(/[^A-Z0-9]/g, '') || 'LOG';
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([text], { type: 'application/x-adif' }));
+    a.download = 'wfweb_' + myCall + '_' + ts + suffix + '.adi';
+    a.click();
+    URL.revokeObjectURL(a.href);
+}
+
+// Download the logbook as ADIF: everything, or only the QSOs without an
+// export stamp.  For the latter the browser reports back exactly the ids it
+// received once the file is saved, so the server stamps those and nothing
+// logged in the meantime.
+function downloadAdif(newOnly) {
+    newOnly = newOnly === true;
+    var url = '/api/v1/logbook/adif' + (newOnly ? '?new=1' : '');
+    setDigiLogStatus('Preparing download\u2026');
+    return fetch(url, { cache: 'no-store' }).then(function(r) {
         if (!r.ok) throw new Error('HTTP ' + r.status);
-        return r.blob();
-    }).then(function(blob) {
-        var iso = new Date().toISOString();
-        var ts = iso.substr(0, 10).replace(/-/g, '') + '_' + iso.substr(11, 8).replace(/:/g, '');
-        var myCall = ((document.getElementById('digiMyCall') || {}).value || '').toUpperCase().replace(/[^A-Z0-9]/g, '') || 'LOG';
-        var a = document.createElement('a');
-        a.href = URL.createObjectURL(blob);
-        a.download = 'wfweb_' + myCall + '_' + ts + '.adi';
-        a.click();
-        URL.revokeObjectURL(a.href);
+        return r.text();
+    }).then(function(text) {
+        var ids = [];
+        var re = /<APP_WFWEB_ID:\d+>([^\s<]+)/g, m;
+        while ((m = re.exec(text))) ids.push(m[1]);
+        if (newOnly && !ids.length) { setDigiLogStatus('No new QSOs to download'); return; }
+        saveAdifFile(text, newOnly ? '_new' : '');
+        if (!newOnly) { setDigiLogStatus('Downloaded ' + ids.length + ' QSOs'); return; }
+        return fetch('/api/v1/logbook/exported', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ids: ids })
+        }).then(function(r) { return r.json(); }).then(function(j) {
+            logbookUnexported = j.unexported || 0;
+            updateDigiLogFooter();
+            setDigiLogStatus('Downloaded ' + ids.length + ' new QSO' + (ids.length === 1 ? '' : 's'));
+        });
+    }).catch(function(e) {
+        setDigiLogStatus('Download failed: ' + e.message);
     });
 }
 
-function clearDigiLog() {
-    var btn = document.getElementById('digiClearLogBtn');
-    if (!logbookTotal) {
-        if (btn) { btn.textContent = 'Log is empty'; setTimeout(function() { btn.textContent = '\u2715 Clear Log'; }, 1500); }
-        return;
-    }
-    // Wiping thousands of imported QSOs must not be a double-click away:
-    // the user types the QSO count.  The ADIF is downloaded first, the clear
-    // is sent only once it has arrived, and the server keeps the old file
-    // as logbook.adi.<timestamp>.bak in any case.
-    var typed = window.prompt('Delete ALL ' + logbookTotal + ' QSOs from the server logbook?\n\n' +
-        'A copy is downloaded first, and the server keeps the previous file as a .bak next to the logbook.\n\n' +
-        'Type ' + logbookTotal + ' to confirm:');
-    if (typed === null) return;
-    if (String(typed).trim() !== String(logbookTotal)) {
-        if (btn) { btn.textContent = 'Not cleared'; setTimeout(function() { btn.textContent = '\u2715 Clear Log'; }, 1500); }
-        return;
-    }
-    if (btn) btn.textContent = 'Downloading\u2026';
-    downloadAdif().then(function() {
-        send({ cmd: 'clearLogbook' });
+// Merge an ADIF file into the server logbook (duplicates are skipped).  The
+// records count as already exported: they come from a log that handled its
+// own uploads.  The result is shown inline; nothing pops up.
+function importAdif(file) {
+    if (!file) return;
+    setDigiLogStatus('Importing ' + file.name + '\u2026');
+    file.arrayBuffer().then(function(buf) {
+        return fetch('/api/v1/logbook/adif', { method: 'POST', body: buf });
+    }).then(function(r) {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.json();
+    }).then(function(j) {
+        var msg = 'Imported ' + j.added + ' QSO' + (j.added === 1 ? '' : 's');
+        if (j.skipped) msg += ', ' + j.skipped + ' duplicate' + (j.skipped === 1 ? '' : 's') + ' skipped';
+        setDigiLogStatus(msg);
     }).catch(function(e) {
-        console.warn('ADIF download failed, log NOT cleared', e);
-    }).finally(function() {
-        if (btn) btn.textContent = '\u2715 Clear Log';
+        setDigiLogStatus('Import failed: ' + e.message);
     });
 }
 
@@ -10922,13 +10960,17 @@ function initDigiHandlers() {
     var addQsoBtn = document.getElementById('digiAddQsoBtn');
     if (addQsoBtn) { addQsoBtn.addEventListener('click', addDigiQso); }
 
-    // Download ADIF button
+    // ADIF download (all / new) and import
     var adifBtn = document.getElementById('digiAdifBtn');
-    if (adifBtn) { adifBtn.addEventListener('click', downloadAdif); }
-
-    // Clear log button
-    var clearLogBtn = document.getElementById('digiClearLogBtn');
-    if (clearLogBtn) { clearLogBtn.addEventListener('click', clearDigiLog); }
+    if (adifBtn) { adifBtn.addEventListener('click', function() { downloadAdif(false); }); }
+    var adifNewBtn = document.getElementById('digiAdifNewBtn');
+    if (adifNewBtn) { adifNewBtn.addEventListener('click', function() { downloadAdif(true); }); }
+    var adifImportBtn = document.getElementById('digiAdifImportBtn');
+    var adifFile = document.getElementById('digiAdifFile');
+    if (adifImportBtn && adifFile) {
+        adifImportBtn.addEventListener('click', function() { adifFile.value = ''; adifFile.click(); });
+        adifFile.addEventListener('change', function() { importAdif(adifFile.files && adifFile.files[0]); });
+    }
 
     // Enter key in log edit row → save if callsign is not empty
     var logRows = document.getElementById('digiLogRows');

@@ -144,6 +144,21 @@ int main()
         require(reopened.page(10, QString(), QString()).entries[0].id == firstId, "foreign: ids stable across restarts");
     }
 
+    // --- export bookkeeping ---
+    {
+        require(lb.unexportedCount() == 3, "export: everything new to start with");
+        require(Logbook::parseAdif(lb.toAdif(true)).size() == 3, "export: toAdif(true) lists the new ones");
+        const QsoRecord newest = lb.page(1, QString(), QString()).entries[0];
+        require(lb.markExported({newest.id, "nope"}) == 1, "export: mark one");
+        require(lb.unexportedCount() == 2 && !lb.find(newest.id)->exported.isEmpty(), "export: stamped");
+        require(lb.find(newest.id)->exported.size() == 16, "export: stamp format yyyyMMddTHHmmssZ");
+        require(lb.markExported({newest.id}) == 0, "export: idempotent");
+        require(Logbook::parseAdif(lb.toAdif(true)).size() == 2, "export: toAdif(true) excludes it");
+        Logbook again;
+        again.open(path);
+        require(again.unexportedCount() == 2 && again.find(newest.id)->exported == lb.find(newest.id)->exported, "export: stamp persisted in APP_WFWEB_EXPORTED");
+    }
+
     // --- clear never discards data: the old file becomes a .bak ---
     {
         const int before = lb.count();

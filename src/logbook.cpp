@@ -36,6 +36,7 @@ QsoRecord QsoRecord::normalized() const
     r.name      = name.trimmed().left(128);
     r.freq      = freq > 0 ? freq : 0;
     r.df        = df;
+    r.exported  = exported.trimmed().left(20);
     return r;
 }
 
@@ -55,6 +56,7 @@ QsoRecord QsoRecord::fromJson(const QJsonObject &in, const QString &id)
     r.comment   = in.value("comment").toString();
     r.name      = in.value("name").toString();
     r.freq      = in.value("freq").toVariant().toLongLong();
+    r.exported  = in.value("exported").toString();   // round-trips through edits
     if (in.value("df").isDouble())
         r.df = in.value("df").toInt();
     return r.normalized();
@@ -79,6 +81,7 @@ QJsonObject QsoRecord::toJson() const
     put("rstRcvd", rstRcvd);
     put("comment", comment);
     put("name", name);
+    put("exported", exported);
     if (df >= 0) o["df"] = df;
     return o;
 }
@@ -114,6 +117,7 @@ QByteArray QsoRecord::toAdif() const
     field("NAME", name);
     if (df >= 0)
         field("APP_WFWEB_DF", QString::number(df));
+    field("APP_WFWEB_EXPORTED", exported);
     out += "<EOR>\n";
     return out;
 }
@@ -126,6 +130,11 @@ QByteArray Logbook::adifHeader()
 {
     return QByteArray("ADIF Export from wfweb\n"
                       "<ADIF_VER:5>3.1.4 <PROGRAMID:5>wfweb <EOH>\n");
+}
+
+QString Logbook::exportStamp()
+{
+    return QDateTime::currentDateTimeUtc().toString("yyyyMMdd'T'HHmmss'Z'");
 }
 
 // Linear byte scanner: <NAME:len[:type]>value ... <EOR>.  Lengths are byte
@@ -155,6 +164,7 @@ QList<QsoRecord> Logbook::parseAdif(const QByteArray &data)
             r.comment   = QString::fromUtf8(fields.value("COMMENT"));
             r.name      = QString::fromUtf8(fields.value("NAME"));
             r.freq      = qRound64(fields.value("FREQ").toDouble() * 1e6);
+            r.exported  = QString::fromUtf8(fields.value("APP_WFWEB_EXPORTED"));
             if (fields.contains("APP_WFWEB_DF"))
                 r.df = fields.value("APP_WFWEB_DF").toInt();
             r = r.normalized();
@@ -464,4 +474,44 @@ Logbook::Page Logbook::page(int limit, const QString &before, const QString &cal
     if (i > 0 && !result.entries.isEmpty())
         result.next = cursorFor(result.entries.last());
     return result;
+}
+
+// ---------------------------------------------------------------------------
+// Export bookkeeping
+// ---------------------------------------------------------------------------
+
+int Logbook::unexportedCount() const
+{
+    int n = 0;
+    for (const QsoRecord &r : records_)
+        if (r.exported.isEmpty()) ++n;
+    return n;
+}
+
+QByteArray Logbook::toAdif(bool unexportedOnly) const
+{
+    QByteArray out = adifHeader();
+    for (const QsoRecord &r : records_)
+        if (!unexportedOnly || r.exported.isEmpty())
+            out += r.toAdif();
+    return out;
+}
+
+int Logbook::markExported(const QStringList &ids)
+{
+    const QSet<QString> wanted(ids.cbegin(), ids.cend());
+    const QString stamp = exportStamp();
+    const QList<QsoRecord> backup = records_;
+    int changed = 0;
+    for (QsoRecord &r : records_) {
+        if (r.exported.isEmpty() && wanted.contains(r.id)) {
+            r.exported = stamp;
+            ++changed;
+        }
+    }
+    if (changed && !rewrite()) {
+        records_ = backup;
+        return 0;
+    }
+    return changed;
 }

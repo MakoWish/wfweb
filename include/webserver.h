@@ -217,6 +217,7 @@ private:
     bool logbookUpdate(const QString &id, const QsoRecord &r);
     bool logbookRemove(const QString &id);
     void logbookReset();
+    QJsonObject logbookSummary() const;
     bool logbookClear(const char *who);
     void wsjtxSendHeartbeat();
     void wsjtxSendStatus();

@@ -912,6 +912,12 @@ void webServer::handleRestRequest(QTcpSocket *socket, const QString &method,
     // so a lifetime log stays cheap for the browser and the Pi alike.
     if (p == "/api/v1/logbook/adif") {
         if (method == "GET") {
+            // ?new=1: only records without an export stamp.  The client
+            // confirms what it saved via POST /api/v1/logbook/exported.
+            if (query.queryItemValue("new") == "1") {
+                sendHttpResponse(socket, 200, "OK", "application/x-adif; charset=utf-8", logbook_.toAdif(true));
+                return;
+            }
             QFile file(logbook_.path());
             if (!file.open(QIODevice::ReadOnly)) {
                 sendHttpResponse(socket, 500, "Internal Server Error", "text/plain",
@@ -920,14 +926,41 @@ void webServer::handleRestRequest(QTcpSocket *socket, const QString &method,
             }
             sendHttpResponse(socket, 200, "OK", "application/x-adif; charset=utf-8", file.readAll());
         } else if (method == "POST") {
-            // Import: merge every record of the posted ADIF document.
-            const int added = logbook_.merge(Logbook::parseAdif(body));
-            qInfo() << "Logbook: imported" << added << "QSOs over REST";
+            // Import: merge every record of the posted ADIF document.  An
+            // imported file normally comes from a log that already handled
+            // its own uploads, so its records count as exported unless the
+            // caller says ?new=1.
+            QList<QsoRecord> incoming = Logbook::parseAdif(body);
+            if (query.queryItemValue("new") != "1") {
+                const QString stamp = Logbook::exportStamp();
+                for (QsoRecord &r : incoming)
+                    if (r.exported.isEmpty()) r.exported = stamp;
+            }
+            const int added = logbook_.merge(incoming);
+            qInfo() << "Logbook: imported" << added << "of" << incoming.size() << "QSOs over REST";
             if (added) logbookReset();
-            sendRestResponse(socket, 202, QJsonObject{{"added", added}, {"total", logbook_.count()}});
+            sendRestResponse(socket, 202, QJsonObject{{"added", added}, {"skipped", incoming.size() - added},
+                                                     {"total", logbook_.count()}, {"unexported", logbook_.unexportedCount()}});
         } else {
             sendRestResponse(socket, 405, QJsonObject{{"error", "Method not allowed"}});
         }
+        return;
+    }
+    if (p == "/api/v1/logbook/exported") {
+        // The client that saved a "new" download reports the ids it got.
+        if (method != "POST") {
+            sendRestResponse(socket, 405, QJsonObject{{"error", "Method not allowed"}});
+            return;
+        }
+        QStringList ids;
+        const QJsonArray arr = parseBody().value("ids").toArray();
+        for (const QJsonValue &v : arr) ids.append(v.toString());
+        const int marked = logbook_.markExported(ids);
+        if (marked) {
+            qInfo() << "Logbook:" << marked << "QSOs marked as exported";
+            logbookReset();
+        }
+        sendRestResponse(socket, 200, QJsonObject{{"marked", marked}, {"unexported", logbook_.unexportedCount()}});
         return;
     }
     if (p == "/api/v1/logbook") {
@@ -937,7 +970,8 @@ void webServer::handleRestRequest(QTcpSocket *socket, const QString &method,
                                                    query.queryItemValue("call"));
             QJsonArray entries;
             for (const QsoRecord &r : pg.entries) entries.append(r.toJson());
-            QJsonObject out{{"entries", entries}, {"total", logbook_.count()}};
+            QJsonObject out{{"entries", entries}, {"total", logbook_.count()},
+                            {"unexported", logbook_.unexportedCount()}};
             if (!pg.next.isEmpty()) out["next"] = pg.next;
             sendRestResponse(socket, 200, out);
         } else if (method == "POST") {
@@ -1852,9 +1886,6 @@ void webServer::handleCommand(QWebSocket *client, const QJsonObject &cmd)
     else if (type == "deleteQso") {
         logbookRemove(cmd["id"].toString());
     }
-    else if (type == "clearLogbook") {
-        logbookClear("web UI");
-    }
     else if (type == "mergeLogbook") {
         // Migration of a browser-local (localStorage) log.  The browser drops
         // its copy only when this reply says the merge is on persistent
@@ -1869,7 +1900,8 @@ void webServer::handleCommand(QWebSocket *client, const QJsonObject &cmd)
             logbookReset();
         }
         sendJsonTo(client, QJsonObject{{"type", "logbookMerged"}, {"added", added},
-                                       {"total", logbook_.count()}, {"persistent", logbookPersistent_}});
+                                       {"total", logbook_.count()}, {"persistent", logbookPersistent_},
+                                       {"unexported", logbook_.unexportedCount()}});
     }
     else if (type == "setWsjtx") {
         const bool enabled = cmd["enabled"].toBool();
@@ -3383,8 +3415,7 @@ void webServer::sendCurrentState(QWebSocket *client)
     info["logbookPersistent"] = logbookPersistent_;
     sendJsonTo(client, info);
     // The log itself is paged over REST; this only tells the browser to fetch page 1.
-    sendJsonTo(client, QJsonObject{{"type", "logbook"}, {"count", logbook_.count()},
-                                   {"persistent", logbookPersistent_}});
+    sendJsonTo(client, logbookSummary());
 
     // Send current status
     if (rigCaps) {
@@ -5863,10 +5894,17 @@ void webServer::wsjtxSaveSettings(bool enabled)
 // Every browser applies the delta to whatever page it has loaded; nobody
 // ever receives the whole log.
 
+QJsonObject webServer::logbookSummary() const
+{
+    return QJsonObject{{"type", "logbook"}, {"count", logbook_.count()},
+                       {"unexported", logbook_.unexportedCount()}, {"persistent", logbookPersistent_}};
+}
+
 bool webServer::logbookAdd(QsoRecord &r)
 {
     if (!r.isValid() || !logbook_.add(r)) return false;
-    sendJsonToAll(QJsonObject{{"type", "qsoAdded"}, {"qso", r.toJson()}, {"count", logbook_.count()}});
+    sendJsonToAll(QJsonObject{{"type", "qsoAdded"}, {"qso", r.toJson()}, {"count", logbook_.count()},
+                              {"unexported", logbook_.unexportedCount()}});
     wsjtxSendQso(r);
     return true;
 }
@@ -5881,15 +5919,15 @@ bool webServer::logbookUpdate(const QString &id, const QsoRecord &r)
 bool webServer::logbookRemove(const QString &id)
 {
     if (!logbook_.remove(id)) return false;
-    sendJsonToAll(QJsonObject{{"type", "qsoDeleted"}, {"id", id}, {"count", logbook_.count()}});
+    sendJsonToAll(QJsonObject{{"type", "qsoDeleted"}, {"id", id}, {"count", logbook_.count()},
+                              {"unexported", logbook_.unexportedCount()}});
     return true;
 }
 
 // Whole-log change (clear, merge, import): browsers reload their first page.
 void webServer::logbookReset()
 {
-    sendJsonToAll(QJsonObject{{"type", "logbook"}, {"count", logbook_.count()},
-                              {"persistent", logbookPersistent_}});
+    sendJsonToAll(logbookSummary());
 }
 
 bool webServer::logbookClear(const char *who)

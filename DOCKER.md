@@ -211,8 +211,7 @@ docker run --rm -it \
 > detects a container without a volume: it warns in its log and in the web
 > UI's log panel, and browsers then keep their own copy of what they log and
 > re-send it on every connect, so nothing is lost as long as you keep using
-> the same browsers, but a proper volume is the real fix. Clearing the log
-> always leaves the previous file as `logbook.adi.<timestamp>.bak`.
+> the same browsers, but a proper volume is the real fix.
 
 You can also supply a pre-made settings file:
 

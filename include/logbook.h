@@ -24,6 +24,11 @@ struct QsoRecord {
     QString comment;
     QString name;
     int     df = -1;    // digi audio offset in Hz, <0 = not set
+    // UTC stamp (yyyyMMddTHHmmssZ) of the export that included this record,
+    // persisted as APP_WFWEB_EXPORTED.  Empty = not exported yet ("new").
+    // Set by the client that saved the export (see Logbook::markExported),
+    // so a record logged while a download was in flight is never skipped.
+    QString exported;
 
     bool isValid() const { return !call.isEmpty(); }
     // Chronological sort key.  Entries without date/time sort first (oldest).
@@ -49,6 +54,7 @@ public:
 
     static QByteArray adifHeader();
     static QList<QsoRecord> parseAdif(const QByteArray &data);
+    static QString exportStamp();   // now, in the APP_WFWEB_EXPORTED format
     // Does a logbook in `dir` outlive the process's container?
     //
     // Why this exists: before the server-side logbook, the QSO log lived in
@@ -88,6 +94,13 @@ public:
     // Returns the number added; one file rewrite for the whole batch.
     int merge(const QList<QsoRecord> &incoming);
     const QsoRecord *find(const QString &id) const;
+
+    // Export bookkeeping.  toAdif(true) is the "download new" document;
+    // markExported() stamps the given ids (one rewrite) and returns how many
+    // records changed.
+    int unexportedCount() const;
+    QByteArray toAdif(bool unexportedOnly) const;
+    int markExported(const QStringList &ids);
 
     // Up to `limit` entries older than `before` (a cursor from a previous
     // page, empty = start from the newest), optionally only those with the

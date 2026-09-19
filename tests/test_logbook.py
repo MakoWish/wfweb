@@ -141,7 +141,7 @@ def test_logbook_import_merges_and_dedupes(rest_url):
             "<name:5>José <gridsquare:4>JN45 <eor>\r\n").encode("utf-8")
     imported = requests.post(f"{base}/adif", data=adif, timeout=5)
     assert imported.status_code == 202
-    assert imported.json() == {"added": 1, "total": 2}
+    assert imported.json() == {"added": 1, "skipped": 1, "total": 2, "unexported": 1}   # K1TEST is still new
 
     entries = requests.get(base, timeout=5).json()["entries"]
     assert [e["call"] for e in entries] == ["K1TEST", "IK1ZZ"]
@@ -152,5 +152,47 @@ def test_logbook_import_merges_and_dedupes(rest_url):
     assert ik1["id"]
 
     # Re-importing the same document adds nothing.
-    assert requests.post(f"{base}/adif", data=adif, timeout=5).json()["added"] == 0
+    again = requests.post(f"{base}/adif", data=adif, timeout=5).json()
+    assert again["added"] == 0 and again["skipped"] == 2
+    _clear(base)
+
+
+def test_logbook_export_bookkeeping(rest_url):
+    base = _base(rest_url)
+    _clear(base)
+
+    # Logged QSOs are "new" until a client confirms it saved them.
+    a = requests.post(base, json=_qso("K1NEW", "20260918", "100000"), timeout=5).json()
+    b = requests.post(base, json=_qso("K2NEW", "20260918", "110000"), timeout=5).json()
+    assert requests.get(base, timeout=5).json()["unexported"] == 2
+    new = requests.get(f"{base}/adif", params={"new": 1}, timeout=5).text
+    assert new.count("<EOR>") == 2 and "<APP_WFWEB_EXPORTED" not in new
+
+    # Confirm only one of them: the other stays new.
+    r = requests.post(f"{base}/exported", json={"ids": [a["id"], "no-such-id"]}, timeout=5).json()
+    assert r == {"marked": 1, "unexported": 1}
+    new = requests.get(f"{base}/adif", params={"new": 1}, timeout=5).text
+    assert new.count("<EOR>") == 1 and "K2NEW" in new
+    full = requests.get(f"{base}/adif", timeout=5).text
+    assert full.count("<APP_WFWEB_EXPORTED:16>") == 1
+
+    # The stamp survives an edit made from the listed object.
+    entry = next(e for e in requests.get(base, timeout=5).json()["entries"] if e["id"] == a["id"])
+    assert entry["exported"]
+    entry["rstRcvd"] = "-01"
+    edited = requests.put(f"{base}/{a['id']}", json=entry, timeout=5).json()
+    assert edited["exported"] == entry["exported"]
+    assert requests.get(base, timeout=5).json()["unexported"] == 1
+
+    # Marking twice is a no-op.
+    assert requests.post(f"{base}/exported", json={"ids": [a["id"]]}, timeout=5).json()["marked"] == 0
+
+    # An imported file counts as already exported... unless asked otherwise.
+    doc = ("<eoh>\n<call:5>IK3ZZ <qso_date:8>20200101 <time_on:6>120000 <mode:3>FT8 <eor>\n"
+           "<call:5>IK4ZZ <qso_date:8>20200102 <time_on:6>120000 <mode:3>FT8 <eor>\n").encode()
+    imp = requests.post(f"{base}/adif", data=doc, timeout=5).json()
+    assert imp["added"] == 2 and imp["unexported"] == 1          # only K2NEW is still new
+    doc2 = b"<eoh>\n<call:5>IK5ZZ <qso_date:8>20200103 <time_on:6>120000 <mode:3>FT8 <eor>\n"
+    imp2 = requests.post(f"{base}/adif", params={"new": 1}, data=doc2, timeout=5).json()
+    assert imp2["added"] == 1 and imp2["unexported"] == 2
     _clear(base)

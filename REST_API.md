@@ -82,6 +82,8 @@ lifetime log stays cheap for the browser and the server alike.
 | `PUT` | `/api/v1/logbook/{id}` | Replace an entry (the id is kept) |
 | `DELETE` | `/api/v1/logbook/{id}` | Delete an entry |
 | `GET` | `/api/v1/logbook/adif` | Download the complete ADIF file |
+| `GET` | `/api/v1/logbook/adif?new=1` | Download only the QSOs not yet exported |
+| `POST` | `/api/v1/logbook/exported` | `{"ids":[...]}`: stamp those QSOs as exported |
 | `POST` | `/api/v1/logbook/adif` | Import an ADIF document (body = the file); duplicates are skipped |
 
 `GET /api/v1/logbook` returns `{ "entries": [...], "total": N, "next": "<cursor>" }`.
@@ -93,7 +95,19 @@ size of the whole log.
 
 A QSO object carries `date` (YYYYMMDD), `time` (HHMMSS), `call`, `freq` (Hz),
 `band`, `mode`, `grid` (own), `theirGrid`, `rstSent`, `rstRcvd`, and
-optionally `comment`, `name`, `df`. Only `call` is required.
+optionally `comment`, `name`, `df`, `exported`. Only `call` is required.
+
+**Export bookkeeping.** Each record carries an export stamp
+(`APP_WFWEB_EXPORTED`, UTC `yyyyMMddTHHmmssZ`) once it has been included in
+a "new QSOs" download; records without one are *new*, and every list and
+event reports their number as `unexported`. The flow is two-step so that a
+QSO logged while a download is in flight is never skipped: `GET
+/api/v1/logbook/adif?new=1` returns the new records, the client saves the
+file, then `POST /api/v1/logbook/exported` with the `APP_WFWEB_ID`s it
+received; the reply is `{"marked":n,"unexported":m}`. `POST
+/api/v1/logbook/adif` imports records as already exported (they come from a
+log that handled its own uploads) unless called with `?new=1`; its reply is
+`{"added","skipped","total","unexported"}`. Editing a record keeps its stamp.
 
 Every change made through REST or the web UI is broadcast to all connected
 browsers as a delta:
@@ -102,13 +116,16 @@ browsers as a delta:
 {"type":"qsoAdded","qso":{...},"count":N}
 {"type":"qsoUpdated","qso":{...}}
 {"type":"qsoDeleted","id":"...","count":N}
-{"type":"logbook","count":N}          // whole-log change (clear, merge, import): reload page 1
+{"type":"logbook","count":N,"unexported":M,"persistent":true}   // whole-log change: reload page 1
 ```
 
-Browsers log through the WebSocket with `qsoLogged {qso}`, `updateQso {id,qso}`,
-`deleteQso {id}`, `clearLogbook {}` and `mergeLogbook {entries}`; the server
-applies the same validation and emits the same deltas. `mergeLogbook` is
-answered with `{"type":"logbookMerged","added":n,"total":N,"persistent":bool}`.
+Browsers log through the WebSocket with `qsoLogged {qso}`, `updateQso {id,qso}`
+and `deleteQso {id}`, and hand over a pre-server browser log with
+`mergeLogbook {entries}`; the server applies the same validation and emits
+the same deltas (each carrying `count` and `unexported`). `mergeLogbook` is
+answered with `{"type":"logbookMerged","added":n,"total":N,"unexported":m,"persistent":bool}`.
+Clearing the log is deliberately not offered in the web UI; use the REST
+`DELETE`, which keeps the previous file as a `.bak`.
 
 `persistent` (also in `rigInfo.logbookPersistent` and on every `logbook`
 summary) is `false` when the server runs in a container and the logbook is
