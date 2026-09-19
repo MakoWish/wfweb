@@ -1,9 +1,11 @@
 #include "logbook.h"
 
+#include <QDateTime>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
 #include <QHash>
+#include <QRegularExpression>
 #include <QSaveFile>
 #include <QSet>
 #include <QUuid>
@@ -305,13 +307,72 @@ bool Logbook::remove(const QString &id)
     return false;
 }
 
-bool Logbook::clear()
+bool Logbook::clear(QString *backupPath)
 {
+    if (backupPath) backupPath->clear();
+    if (!records_.isEmpty() && QFile::exists(path_)) {
+        const QString stamp = QDateTime::currentDateTimeUtc().toString("yyyyMMdd-HHmmss");
+        QString bak = path_ + '.' + stamp + ".bak";
+        for (int n = 2; QFile::exists(bak); ++n)   // two clears in one second
+            bak = path_ + '.' + stamp + '-' + QString::number(n) + ".bak";
+        if (!QFile::rename(path_, bak)) return false;
+        if (backupPath) *backupPath = bak;
+    }
     const QList<QsoRecord> backup = records_;
     records_.clear();
     if (rewrite()) return true;
     records_ = backup;
     return false;
+}
+
+// ---------------------------------------------------------------------------
+// Persistence check (containers)
+// ---------------------------------------------------------------------------
+
+bool Logbook::isPersistentLocation(const QString &dir, const QString &mountinfo, bool inContainer)
+{
+    if (!inContainer) return true;
+    // /proc/self/mountinfo: "id parent maj:min ROOT MOUNTPOINT opts ... - fstype src sopts".
+    // Find the deepest mount point that contains `dir`.  On the container's
+    // own root overlay that is "/"; a named volume or a bind mount is
+    // anything else.  A Docker/Podman *anonymous* volume (ROOT is
+    // .../volumes/<64 hex>/_data) also counts as ephemeral: it survives a
+    // stop/start but is deleted by `docker run --rm` and on recreate.
+    const QString target = QDir::cleanPath(dir);
+    QString best, bestRoot;
+    const QStringList lines = mountinfo.split('\n', Qt::SkipEmptyParts);
+    for (const QString &line : lines) {
+        const QStringList f = line.split(' ');
+        if (f.size() < 5) continue;
+        QString mp = f[4];
+        mp.replace("\\040", " ");
+        const bool contains = mp == "/" || target == mp || target.startsWith(mp + '/');
+        if (contains && mp.size() > best.size()) { best = mp; bestRoot = f[3]; }
+    }
+    if (best.isEmpty() || best == "/") return false;
+    static const QRegularExpression anonymousVolume("/volumes/[0-9a-f]{64}/_data$");
+    return !anonymousVolume.match(bestRoot).hasMatch();
+}
+
+bool Logbook::isPersistentLocation(const QString &dir)
+{
+#ifdef Q_OS_LINUX
+    bool inContainer = QFile::exists("/.dockerenv") || QFile::exists("/run/.containerenv");
+    if (!inContainer) {
+        QFile cg("/proc/1/cgroup");
+        if (cg.open(QIODevice::ReadOnly)) {
+            const QByteArray c = cg.readAll();
+            inContainer = c.contains("docker") || c.contains("containerd") || c.contains("kubepods") || c.contains("libpod");
+        }
+    }
+    if (!inContainer) return true;
+    QFile mi("/proc/self/mountinfo");
+    if (!mi.open(QIODevice::ReadOnly)) return true;   // can't tell: don't cry wolf
+    return isPersistentLocation(dir, QString::fromUtf8(mi.readAll()), true);
+#else
+    Q_UNUSED(dir)
+    return true;
+#endif
 }
 
 int Logbook::merge(const QList<QsoRecord> &incoming)

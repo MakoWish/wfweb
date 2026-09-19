@@ -144,9 +144,38 @@ int main()
         require(reopened.page(10, QString(), QString()).entries[0].id == firstId, "foreign: ids stable across restarts");
     }
 
-    // --- clear leaves a header-only file ---
-    require(lb.clear() && lb.count() == 0, "clear");
-    require(readAll(path).count("<EOR>") == 0 && readAll(path).contains("<EOH>"), "clear: header only");
+    // --- clear never discards data: the old file becomes a .bak ---
+    {
+        const int before = lb.count();
+        QString bak;
+        require(lb.clear(&bak) && lb.count() == 0, "clear");
+        require(readAll(path).count("<EOR>") == 0 && readAll(path).contains("<EOH>"), "clear: header only");
+        require(!bak.isEmpty() && bak.startsWith(path) && bak.endsWith(".bak") && QFile::exists(bak), "clear: backup file next to the logbook");
+        require(Logbook::parseAdif(readAll(bak)).size() == before, "clear: backup holds every record");
+        QString none;
+        require(lb.clear(&none) && none.isEmpty(), "clear: empty log makes no backup");
+        QsoRecord again = qso("K1AGAIN", "20260918", "130000");
+        QString bak2;
+        require(lb.add(again) && lb.clear(&bak2) && bak2 != bak && QFile::exists(bak2), "clear: second backup in the same second gets a distinct name");
+    }
+
+    // --- persistence check (container without a volume) ---
+    {
+        const QString mi =
+            "22 1 0:21 / / rw,relatime - overlay overlay rw,lowerdir=/x\n"
+            "23 22 0:22 / /proc rw,nosuid - proc proc rw\n"
+            "24 22 8:2 /var/lib/docker/volumes/v/_data /data rw,relatime - ext4 /dev/sda2 rw\n"
+            "25 22 8:2 /srv/with\\040space /mnt/with\\040space rw - ext4 /dev/sda2 rw\n"
+            "26 22 8:2 /var/lib/docker/volumes/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef/_data /anon rw - ext4 /dev/sda2 rw\n";
+        require(Logbook::isPersistentLocation("/data/wfweb/wfweb", mi, true), "persistent: under a mounted /data");
+        require(Logbook::isPersistentLocation("/data", mi, true), "persistent: the mount point itself");
+        require(!Logbook::isPersistentLocation("/root/.local/share/wfweb/wfweb", mi, true), "persistent: root overlay is not");
+        require(!Logbook::isPersistentLocation("/database", mi, true), "persistent: prefix match respects path boundaries");
+        require(Logbook::isPersistentLocation("/mnt/with space/log", mi, true), "persistent: octal-escaped mount point");
+        require(!Logbook::isPersistentLocation("/anon/wfweb", mi, true), "persistent: Docker anonymous volume is ephemeral");
+        require(Logbook::isPersistentLocation("/anything", mi, false), "persistent: not in a container => always true");
+        require(!Logbook::isPersistentLocation("/anything", QString(), true), "persistent: empty mountinfo inside a container => not persistent");
+    }
 
     qInfo() << "logbook_test: all checks passed";
     return 0;

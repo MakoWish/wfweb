@@ -5,6 +5,8 @@ tests add a handful of QSOs out of order and check ordering, paging, the
 callsign filter, edit/delete, the ADIF download, import and clear.
 """
 
+from pathlib import Path
+
 import requests
 
 
@@ -19,10 +21,22 @@ def _qso(call, date, time, **extra):
     return q
 
 
+LOGBOOK_DIR = Path("/tmp/wfweb-test/.local/share/wfweb/wfweb")   # HOME of the wfweb_instance fixture
+
+
 def _clear(base):
+    had = requests.get(base, timeout=5).json()["total"]
+    before = set(LOGBOOK_DIR.glob("logbook.adi.*.bak"))
     r = requests.delete(base, timeout=5)
     assert r.status_code == 202
     assert requests.get(base, timeout=5).json()["total"] == 0
+    new_baks = set(LOGBOOK_DIR.glob("logbook.adi.*.bak")) - before
+    if had:
+        # clearing never discards data: the previous file is kept as a .bak
+        assert len(new_baks) == 1, new_baks
+        assert new_baks.pop().read_text().count("<EOR>") == had
+    else:
+        assert not new_baks
 
 
 def test_logbook_crud_and_adif_download(rest_url):

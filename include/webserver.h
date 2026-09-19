@@ -217,6 +217,7 @@ private:
     bool logbookUpdate(const QString &id, const QsoRecord &r);
     bool logbookRemove(const QString &id);
     void logbookReset();
+    bool logbookClear(const char *who);
     void wsjtxSendHeartbeat();
     void wsjtxSendStatus();
     void wsjtxSendQso(const QsoRecord &qso);
@@ -528,6 +529,7 @@ private:
     QString packetSettingsFile_;
     QString instanceName_;
     Logbook logbook_;
+    bool logbookPersistent_ = true;   // false: container without a volume, file dies with it
     QUdpSocket *wsjtxSocket_ = nullptr;
     QHostAddress wsjtxAddress_;
     quint16 wsjtxPort_ = 2237;

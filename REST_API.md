@@ -78,7 +78,7 @@ lifetime log stays cheap for the browser and the server alike.
 |---|---|---|
 | `GET` | `/api/v1/logbook?limit=100&before=<cursor>&call=<CALL>` | Page of entries, newest first |
 | `POST` | `/api/v1/logbook` | Add an entry from a JSON QSO object |
-| `DELETE` | `/api/v1/logbook` | Clear the whole log |
+| `DELETE` | `/api/v1/logbook` | Clear the whole log (the previous file is kept as `logbook.adi.<timestamp>.bak`) |
 | `PUT` | `/api/v1/logbook/{id}` | Replace an entry (the id is kept) |
 | `DELETE` | `/api/v1/logbook/{id}` | Delete an entry |
 | `GET` | `/api/v1/logbook/adif` | Download the complete ADIF file |
@@ -107,7 +107,14 @@ browsers as a delta:
 
 Browsers log through the WebSocket with `qsoLogged {qso}`, `updateQso {id,qso}`,
 `deleteQso {id}`, `clearLogbook {}` and `mergeLogbook {entries}`; the server
-applies the same validation and emits the same deltas.
+applies the same validation and emits the same deltas. `mergeLogbook` is
+answered with `{"type":"logbookMerged","added":n,"total":N,"persistent":bool}`.
+
+`persistent` (also in `rigInfo.logbookPersistent` and on every `logbook`
+summary) is `false` when the server runs in a container and the logbook is
+not on a mounted volume, i.e. the file is lost when the container is
+recreated. Browsers then keep their own copy of what they log and re-send it
+on every connect, and warn the operator in the log panel.
 
 ### WSJT-X UDP
 

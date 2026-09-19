@@ -204,6 +204,16 @@ docker run --rm -it \
 > the file to `/data/wfweb/wfweb.conf` in the new volume (or simply re-enter
 > your settings in the web UI once).
 
+> **The QSO log now lives on the server.** Earlier releases kept it in each
+> browser, so an ephemeral container was harmless. With this release every
+> browser hands its log to the server on first connect. **Mount a volume at
+> `/data`** or that log lives only as long as the container does. wfweb
+> detects a container without a volume: it warns in its log and in the web
+> UI's log panel, and browsers then keep their own copy of what they log and
+> re-send it on every connect, so nothing is lost as long as you keep using
+> the same browsers, but a proper volume is the real fix. Clearing the log
+> always leaves the previous file as `logbook.adi.<timestamp>.bak`.
+
 You can also supply a pre-made settings file:
 
 ```bash

@@ -950,8 +950,8 @@ void webServer::handleRestRequest(QTcpSocket *socket, const QString &method,
                 sendRestResponse(socket, 202, r.toJson());
             }
         } else if (method == "DELETE") {
-            if (logbook_.clear()) logbookReset();
-            sendRestResponse(socket, 202, QJsonObject{{"status", "cleared"}});
+            if (logbookClear("REST")) sendRestResponse(socket, 202, QJsonObject{{"status", "cleared"}});
+            else sendRestResponse(socket, 500, QJsonObject{{"error", "Logbook is not writable"}});
         } else {
             sendRestResponse(socket, 405, QJsonObject{{"error", "Method not allowed"}});
         }
@@ -1853,17 +1853,23 @@ void webServer::handleCommand(QWebSocket *client, const QJsonObject &cmd)
         logbookRemove(cmd["id"].toString());
     }
     else if (type == "clearLogbook") {
-        if (logbook_.clear()) logbookReset();
+        logbookClear("web UI");
     }
     else if (type == "mergeLogbook") {
-        // One-time migration of a browser-local (localStorage) log.
+        // Migration of a browser-local (localStorage) log.  The browser drops
+        // its copy only when this reply says the merge is on persistent
+        // storage; otherwise it keeps it and re-sends on every connect.
         QList<QsoRecord> incoming;
         const QJsonArray entries = cmd["entries"].toArray();
         for (const QJsonValue &v : entries)
             incoming.append(QsoRecord::fromJson(v.toObject()));
         const int added = logbook_.merge(incoming);
-        qInfo() << "Logbook: merged" << added << "of" << incoming.size() << "browser-local QSOs";
-        if (added) logbookReset();
+        if (added) {
+            qInfo() << "Logbook: merged" << added << "of" << incoming.size() << "browser-local QSOs";
+            logbookReset();
+        }
+        sendJsonTo(client, QJsonObject{{"type", "logbookMerged"}, {"added", added},
+                                       {"total", logbook_.count()}, {"persistent", logbookPersistent_}});
     }
     else if (type == "setWsjtx") {
         const bool enabled = cmd["enabled"].toBool();
@@ -3374,9 +3380,11 @@ void webServer::sendCurrentState(QWebSocket *client)
     info["wsjtxDecodes"] = wsjtxDecodes_;
     info["logbookPath"] = logbook_.path();
     info["logbookCount"] = logbook_.count();
+    info["logbookPersistent"] = logbookPersistent_;
     sendJsonTo(client, info);
     // The log itself is paged over REST; this only tells the browser to fetch page 1.
-    sendJsonTo(client, QJsonObject{{"type", "logbook"}, {"count", logbook_.count()}});
+    sendJsonTo(client, QJsonObject{{"type", "logbook"}, {"count", logbook_.count()},
+                                   {"persistent", logbookPersistent_}});
 
     // Send current status
     if (rigCaps) {
@@ -5813,6 +5821,15 @@ void webServer::configureLogbook(const QString &logbookOverride,
     else
         qWarning().noquote() << "Logbook: cannot open or create" << path << "- QSOs will not be saved";
 
+    // A container without a volume keeps the file only as long as the
+    // container lives.  Say so loudly here and to every browser, which then
+    // keeps its own copy of what it logs (see the SPA's logbookPersistent).
+    logbookPersistent_ = Logbook::isPersistentLocation(QFileInfo(path).absolutePath());
+    if (!logbookPersistent_)
+        qWarning().noquote() << "Logbook: NOT PERSISTENT -" << path
+                             << "is inside the container's own filesystem and will be lost when the"
+                             << "container is recreated. Mount a volume at /data (see DOCKER.md).";
+
     // WSJT-X UDP: --wsjtx implies enable, --no-wsjtx wins (same rules as rigctld).
     wsjtxDecodes_ = wsjtxDecodes || settings->value("WSJTX/Decodes", false).toBool();
     wsjtxForcedOff_ = noWsjtx;
@@ -5867,7 +5884,21 @@ bool webServer::logbookRemove(const QString &id)
 // Whole-log change (clear, merge, import): browsers reload their first page.
 void webServer::logbookReset()
 {
-    sendJsonToAll(QJsonObject{{"type", "logbook"}, {"count", logbook_.count()}});
+    sendJsonToAll(QJsonObject{{"type", "logbook"}, {"count", logbook_.count()},
+                              {"persistent", logbookPersistent_}});
+}
+
+bool webServer::logbookClear(const char *who)
+{
+    QString backup;
+    if (!logbook_.clear(&backup)) {
+        qWarning() << "Logbook: clear failed (" << who << ")";
+        return false;
+    }
+    if (backup.isEmpty()) qInfo().noquote() << "Logbook: cleared (" << who << "), it was already empty";
+    else qInfo().noquote() << "Logbook: cleared (" << who << "), previous file kept as" << backup;
+    logbookReset();
+    return true;
 }
 
 // --- WSJT-X UDP emitter ---

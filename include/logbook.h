@@ -49,6 +49,12 @@ public:
 
     static QByteArray adifHeader();
     static QList<QsoRecord> parseAdif(const QByteArray &data);
+    // False when the process runs in a container and `dir` sits on the
+    // container's own root filesystem rather than a mounted volume, i.e. the
+    // file dies with the container.  Linux only; elsewhere always true.
+    static bool isPersistentLocation(const QString &dir);
+    // Testable core of the above: `mountinfo` is /proc/self/mountinfo text.
+    static bool isPersistentLocation(const QString &dir, const QString &mountinfo, bool inContainer);
     static QString cursorFor(const QsoRecord &r) { return r.sortKey() + QLatin1Char('|') + r.id; }
 
     // Sets the path, creates the file with a header if missing, otherwise
@@ -60,7 +66,9 @@ public:
     bool add(QsoRecord &r);                       // assigns r.id if empty
     bool update(const QString &id, QsoRecord r);  // r.id is replaced by id
     bool remove(const QString &id);
-    bool clear();
+    // Never discards data: a non-empty file is renamed to
+    // <path>.<yyyyMMdd-HHmmss>.bak before the header-only file is written.
+    bool clear(QString *backupPath = nullptr);
     // Adds entries not already present (same date, time, call, freq, mode).
     // Returns the number added; one file rewrite for the whole batch.
     int merge(const QList<QsoRecord> &incoming);

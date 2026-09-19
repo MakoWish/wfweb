@@ -62,11 +62,14 @@ COPY --from=builder /install/usr/lib/librade* /usr/lib/
 COPY --from=builder /src/LICENSE /src/THIRD_PARTY_LICENSES /usr/share/doc/wfweb/
 RUN ldconfig
 
+# Settings, TLS certificate and the ADIF logbook all live under /data: mount
+# a volume there (see DOCKER.md).  Deliberately no VOLUME instruction: that
+# would give an unmounted /data a hidden anonymous volume that `docker run
+# --rm` deletes on exit, and wfweb could no longer tell the operator that
+# the logbook is ephemeral.
 ENV QT_QPA_PLATFORM=offscreen \
     XDG_CONFIG_HOME=/data \
     XDG_DATA_HOME=/data
-
-VOLUME ["/data"]
 
 # Remove the PulseAudio Qt plugin so Qt Multimedia uses ALSA directly.
 # No PulseAudio daemon runs inside the container; leaving the plugin causes

@@ -1351,6 +1351,7 @@ body.digi-open #bottomBar { grid-row: 5; }
 .digi-log-del { color: #844; cursor: pointer; font-size: 14px; text-align: center; line-height: 1; }
 .digi-log-del:hover { color: var(--state-error); }
 .digi-log-empty { color: #224; font-style: italic; padding: 8px 4px; }
+.digi-log-warn { margin: 4px 0 6px; padding: 6px 8px; border: 1px solid var(--warning, #c90); color: var(--warning, #fc3); font-size: 11px; line-height: 1.4; }
 .digi-log-more { display: flex; justify-content: center; align-items: center; gap: 10px; padding: 6px 4px; color: #556; font-size: 10px; }
 .digi-log-input {
     background: #001828; border: 1px solid var(--mode-accent-dim); color: #8cf;
@@ -2477,6 +2478,7 @@ body.digi-open #bottomBar { grid-row: 5; }
                 <span>QSO Log <span id="digiLogCount"></span></span>
                 <button id="digiLogCloseBtn" class="digi-settings-close" style="width:auto;margin:0;padding:2px 12px">&#x2715; Close</button>
             </div>
+            <div id="digiLogWarn" class="digi-log-warn" hidden></div>
             <div class="digi-log-scroll">
                 <div class="digi-log-row header">
                     <span class="digi-log-date">Date</span>
@@ -2987,6 +2989,7 @@ var qsoLog = [];            // the loaded page(s) of the server logbook, newest 
 var logbookTotal = 0;       // QSOs on the server
 var logbookNext = '';       // cursor for the next (older) page, '' at the end
 var logbookLoading = false;
+var logbookPersistent = true;   // false: the server's file dies with its container; keep a copy here
 var wsjtxSettings = null;   // last values received from the server, to send only changes
 var digiLogEditIdx = -1; // index of row currently being edited, -1 = none
 var digiHashBook = null;
@@ -3112,6 +3115,10 @@ function handleMessage(msg) {
             }
             if (msg.model) rigModelName = msg.model;
             if (msg.name !== undefined) rigTagName = msg.name || '';
+            if (msg.logbookPersistent !== undefined) {
+                logbookPersistent = !!msg.logbookPersistent;
+                updateDigiLogWarning();
+            }
             if (msg.wsjtxTarget !== undefined) {
                 wsjtxSettings = { enabled: !!msg.wsjtxEnabled, target: msg.wsjtxTarget || '', decodes: !!msg.wsjtxDecodes };
                 var wse = document.getElementById('digiWsjtxEnable');
@@ -3350,8 +3357,17 @@ function handleMessage(msg) {
             // Summary only (on connect, and after clear / merge / import):
             // the log is paged over REST, so reload the first page.
             logbookTotal = msg.count || 0;
+            if (msg.persistent !== undefined) { logbookPersistent = !!msg.persistent; updateDigiLogWarning(); }
             loadLogbookPage(true);
             migrateBrowserLog();
+            break;
+        case 'logbookMerged':
+            // The server has our browser-local copy.  Drop it only if the
+            // server's storage outlives its container; otherwise it stays
+            // here as the backup and is re-sent on the next connect.
+            if (msg.persistent) {
+                try { localStorage.removeItem('qsoLog'); localStorage.removeItem('digiQsoLog'); } catch(e) {}
+            }
             break;
         case 'qsoAdded': {
             if (msg.count !== undefined) logbookTotal = msg.count;
@@ -10223,7 +10239,31 @@ function commitQsoLogEntry(entry, draftIdx) {
         removeDigiLogRow(draftIdx);
     }
     send({ cmd: 'qsoLogged', qso: entry });
+    if (!logbookPersistent) mirrorQsoLocally(entry);
     return entry;
+}
+
+// Server without durable storage (container, no volume): keep what this
+// browser logs in localStorage too, exactly as before the server logbook
+// existed, so a recreated container is re-seeded from here on connect.
+function mirrorQsoLocally(entry) {
+    try {
+        var copy = JSON.parse(localStorage.getItem('qsoLog') || '[]');
+        if (!Array.isArray(copy)) copy = [];
+        copy.unshift(entry);
+        localStorage.setItem('qsoLog', JSON.stringify(copy.slice(0, 500)));
+    } catch(e) {}
+}
+
+function updateDigiLogWarning() {
+    var el = document.getElementById('digiLogWarn');
+    if (!el) return;
+    el.hidden = logbookPersistent;
+    if (!logbookPersistent) {
+        el.textContent = '\u26A0 This server keeps its logbook inside a container with no volume mounted at /data, ' +
+            'so the log is lost when the container is recreated. QSOs you log from this browser are also kept ' +
+            'here as a backup and re-sent to the server on connect. Mount a volume to fix this (see DOCKER.md).';
+    }
 }
 
 function qsoSortKey(q) { return (q.date || '') + (q.time || ''); }
@@ -10284,18 +10324,17 @@ function loadLogbookPage(reset) {
     }).finally(function() { logbookLoading = false; });
 }
 
-// One-time migration of the old browser-local log into the server logbook.
+// Hand the browser-local log (the pre-server log, or the backup kept for a
+// non-persistent server) to the server.  Idempotent on the server side; the
+// local copy is removed only when the server confirms it is on durable
+// storage (see 'logbookMerged').
 function migrateBrowserLog() {
-    if (window._qsoMigrationChecked) return;
-    window._qsoMigrationChecked = true;
     try {
         var legacy = localStorage.getItem('qsoLog') || localStorage.getItem('digiQsoLog');
-        if (legacy) {
-            var entries = JSON.parse(legacy);
-            if (Array.isArray(entries) && entries.length) send({ cmd: 'mergeLogbook', entries: entries });
-        }
-        localStorage.removeItem('qsoLog');
-        localStorage.removeItem('digiQsoLog');
+        if (!legacy) return;
+        var entries = JSON.parse(legacy);
+        if (Array.isArray(entries) && entries.length) send({ cmd: 'mergeLogbook', entries: entries });
+        else { localStorage.removeItem('qsoLog'); localStorage.removeItem('digiQsoLog'); }
     } catch(e) { console.warn('Could not migrate browser QSO log', e); }
 }
 
@@ -10645,27 +10684,24 @@ function downloadAdif() {
     });
 }
 
-var clearLogConfirmTimer = null;
 function clearDigiLog() {
     var btn = document.getElementById('digiClearLogBtn');
     if (!logbookTotal) {
         if (btn) { btn.textContent = 'Log is empty'; setTimeout(function() { btn.textContent = '\u2715 Clear Log'; }, 1500); }
         return;
     }
-    // First click: ask for confirmation by changing button text
-    if (!clearLogConfirmTimer) {
-        if (btn) btn.textContent = 'Confirm Clear? (' + logbookTotal + ' QSOs)';
-        clearLogConfirmTimer = setTimeout(function() {
-            clearLogConfirmTimer = null;
-            if (btn) btn.textContent = '\u2715 Clear Log';
-        }, 4000);
+    // Wiping thousands of imported QSOs must not be a double-click away:
+    // the user types the QSO count.  The ADIF is downloaded first, the clear
+    // is sent only once it has arrived, and the server keeps the old file
+    // as logbook.adi.<timestamp>.bak in any case.
+    var typed = window.prompt('Delete ALL ' + logbookTotal + ' QSOs from the server logbook?\n\n' +
+        'A copy is downloaded first, and the server keeps the previous file as a .bak next to the logbook.\n\n' +
+        'Type ' + logbookTotal + ' to confirm:');
+    if (typed === null) return;
+    if (String(typed).trim() !== String(logbookTotal)) {
+        if (btn) { btn.textContent = 'Not cleared'; setTimeout(function() { btn.textContent = '\u2715 Clear Log'; }, 1500); }
         return;
     }
-    // Second click: confirmed — download the ADIF, and only once it has
-    // arrived ask the server to clear (one command; the server then
-    // broadcasts a logbook reset and every browser reloads).
-    clearTimeout(clearLogConfirmTimer);
-    clearLogConfirmTimer = null;
     if (btn) btn.textContent = 'Downloading\u2026';
     downloadAdif().then(function() {
         send({ cmd: 'clearLogbook' });
