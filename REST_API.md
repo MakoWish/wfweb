@@ -136,23 +136,26 @@ not on a mounted volume, i.e. the file is lost when the container is
 recreated. Browsers then keep their own copy of what they log and re-send it
 on every connect, and warn the operator in the log panel.
 
-### WSJT-X UDP
+### Remote logging (WSJT-X UDP protocol)
 
-Completed contacts can also be emitted using the standard WSJT-X UDP
-protocol, so GridTracker, JTAlert, Log4OM, CQRLOG, N1MM and similar consume
-them without any wfweb-specific code. The server sends Heartbeat (every 15 s),
-Status, QSO Logged and Logged ADIF (both, as WSJT-X does), optionally Decode,
-and Close at shutdown. QSO messages fire from the server-side commit, so a
-manual SSB or CW entry goes out the same way an FT8 contact does.
+Every logged QSO can be forwarded to an external logging program, so
+GridTracker, JTAlert, Log4OM, CQRLOG, N1MM and similar pick it up without any
+wfweb-specific code: wfweb speaks the WSJT-X UDP protocol they already
+listen for. The server sends Heartbeat (every 15 s), Status, QSO Logged and
+Logged ADIF (both, as WSJT-X does), optionally Decode, and Close at shutdown.
+QSO messages fire from the server-side commit, so a manual SSB or CW entry
+goes out the same way an FT8 contact does.
 
-Configure with `--wsjtx <host[:port]>` (default port 2237, implies enable),
-`--no-wsjtx` (wins over the settings file) and `--wsjtx-decodes`, or with the
-matching Station Settings controls in the web UI (`setWsjtx
-{enabled,target,decodes}` over the WebSocket). Off by default. The target may
-be a multicast group such as `239.255.0.0:2237`, which is what you need when
-more than one listener runs on the same machine. The client id is `wfweb`,
-or `wfweb - <name>` when `-n` is set. In Docker, use the host's LAN address
-for unicast; multicast generally requires host networking.
+Configure with `--remote-log <host[:port]>` (port 2237 if omitted, implies
+enable), `--no-remote-log` (wins over the settings file) and
+`--remote-log-decodes`, or with the matching Station Settings controls in the
+web UI (`setRemoteLog {enabled,target,decodes}` over the WebSocket; the
+current values come with `rigInfo` as `remoteLogEnabled`, `remoteLogTarget`,
+`remoteLogDecodes`). Off by default. The target may be a multicast group such
+as `239.255.0.0:2237`, which is what you need when more than one listener
+runs on the same machine. The client id shown by listeners is `wfweb`, or
+`wfweb - <name>` when `-n` is set. In Docker, use the host's LAN address for
+unicast; multicast generally requires host networking.
 
 ### GET /api/v1/radio
 

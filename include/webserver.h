@@ -112,9 +112,11 @@ public slots:
     // --name tag: sent to the browser as rigInfo.name so the top bar and
     // tab title show it instead of the rig model.
     void setInstanceName(const QString &name);
+    // Logbook path and remote-logging (WSJT-X UDP) setup from settings +
+    // command-line overrides; runs once on the web thread at startup.
     void configureLogbook(const QString &logbookOverride,
-                          const QString &wsjtxOverride,
-                          bool noWsjtx, bool wsjtxDecodes);
+                          const QString &remoteLogOverride,
+                          bool noRemoteLog, bool remoteLogDecodes);
     // PTT requested via rigctld (Hamlib TCP). Routed through the same
     // setPTT path the WebSocket clients use, so RADE EOO synthesis,
     // packet TX gating and ALC meter polling stay coherent.

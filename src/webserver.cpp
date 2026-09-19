@@ -1918,7 +1918,7 @@ void webServer::handleCommand(QWebSocket *client, const QJsonObject &cmd)
                                        {"total", logbook_.count()}, {"persistent", logbookPersistent_},
                                        {"unexported", logbook_.unexportedCount()}});
     }
-    else if (type == "setWsjtx") {
+    else if (type == "setRemoteLog") {
         const bool enabled = cmd["enabled"].toBool();
         if (wsjtxEnabled_) wsjtxSendClose();
         wsjtxEnabled_ = false;
@@ -1926,7 +1926,7 @@ void webServer::handleCommand(QWebSocket *client, const QJsonObject &cmd)
         wsjtxTarget_ = cmd["target"].toString().trimmed();
         wsjtxDecodes_ = cmd["decodes"].toBool();
         if (!wsjtxForcedOff_ && enabled && !wsjtxTarget_.isEmpty() && !configureWsjtxTarget(wsjtxTarget_))
-            qWarning() << "WSJT-X UDP: cannot resolve target" << wsjtxTarget_;
+            qWarning() << "Remote log: cannot resolve target" << wsjtxTarget_;
         wsjtxSaveSettings(enabled);
     }
     else if (type == "setFrequency") {
@@ -3426,9 +3426,9 @@ void webServer::sendCurrentState(QWebSocket *client)
     if (!audioConfigured && !audioErrorReason.isEmpty()) {
         info["audioError"] = audioErrorReason;
     }
-    info["wsjtxEnabled"] = wsjtxEnabled_;
-    info["wsjtxTarget"] = wsjtxTarget_;
-    info["wsjtxDecodes"] = wsjtxDecodes_;
+    info["remoteLogEnabled"] = wsjtxEnabled_;
+    info["remoteLogTarget"] = wsjtxTarget_;
+    info["remoteLogDecodes"] = wsjtxDecodes_;
     info["logbookPath"] = logbook_.path();
     info["logbookCount"] = logbook_.count();
     info["logbookPersistent"] = logbookPersistent_;
@@ -5847,8 +5847,8 @@ void webServer::setSettingsFile(const QString &path)
 }
 
 void webServer::configureLogbook(const QString &logbookOverride,
-                                 const QString &wsjtxOverride,
-                                 bool noWsjtx, bool wsjtxDecodes)
+                                 const QString &remoteLogOverride,
+                                 bool noRemoteLog, bool remoteLogDecodes)
 {
     std::unique_ptr<QSettings> settings(packetSettingsFile_.isEmpty()
         ? new QSettings()
@@ -5884,19 +5884,25 @@ void webServer::configureLogbook(const QString &logbookOverride,
                              << "is inside the container's own filesystem and will be lost when the"
                              << "container is recreated. Mount a volume at /data (see DOCKER.md).";
 
-    // WSJT-X UDP: --wsjtx implies enable, --no-wsjtx wins (same rules as rigctld).
-    wsjtxDecodes_ = wsjtxDecodes || settings->value("WSJTX/Decodes", false).toBool();
-    wsjtxForcedOff_ = noWsjtx;
-    wsjtxTarget_ = wsjtxOverride.isEmpty() ? settings->value("WSJTX/Target").toString()
-                                           : wsjtxOverride;
-    const bool enabled = !wsjtxOverride.isEmpty() || settings->value("WSJTX/Enabled", false).toBool();
-    if (noWsjtx || !enabled || wsjtxTarget_.isEmpty())
-        qInfo() << "WSJT-X UDP: disabled";
+    // Remote logging: --remote-log implies enable, --no-remote-log wins (same
+    // rules as rigctld).  Settings live under [RemoteLog]; the WSJTX/* keys are
+    // read as a fallback for the dev builds that briefly used them.
+    const auto setting = [&settings](const char *key, const QVariant &def) {
+        const QVariant v = settings->value(QString("RemoteLog/") + key);
+        return v.isValid() ? v : settings->value(QString("WSJTX/") + key, def);
+    };
+    wsjtxDecodes_ = remoteLogDecodes || setting("Decodes", false).toBool();
+    wsjtxForcedOff_ = noRemoteLog;
+    wsjtxTarget_ = remoteLogOverride.isEmpty() ? setting("Target", QString()).toString()
+                                               : remoteLogOverride;
+    const bool enabled = !remoteLogOverride.isEmpty() || setting("Enabled", false).toBool();
+    if (noRemoteLog || !enabled || wsjtxTarget_.isEmpty())
+        qInfo() << "Remote log: disabled";
     else if (configureWsjtxTarget(wsjtxTarget_))
-        qInfo().noquote() << "WSJT-X UDP: sending to" << wsjtxAddress_.toString() + ':' + QString::number(wsjtxPort_)
-                          << "as" << wsjtxId_ << (wsjtxDecodes_ ? "(with decodes)" : "(QSOs only)");
+        qInfo().noquote() << "Remote log: sending QSOs to" << wsjtxAddress_.toString() + ':' + QString::number(wsjtxPort_)
+                          << "as" << wsjtxId_ << (wsjtxDecodes_ ? "(WSJT-X UDP protocol, with decodes)" : "(WSJT-X UDP protocol)");
     else
-        qWarning() << "WSJT-X UDP: cannot resolve target" << wsjtxTarget_;
+        qWarning() << "Remote log: cannot resolve target" << wsjtxTarget_;
 }
 
 void webServer::wsjtxSaveSettings(bool enabled)
@@ -5904,9 +5910,10 @@ void webServer::wsjtxSaveSettings(bool enabled)
     std::unique_ptr<QSettings> settings(packetSettingsFile_.isEmpty()
         ? new QSettings()
         : new QSettings(packetSettingsFile_, QSettings::IniFormat));
-    settings->setValue("WSJTX/Enabled", enabled);
-    settings->setValue("WSJTX/Target", wsjtxTarget_);
-    settings->setValue("WSJTX/Decodes", wsjtxDecodes_);
+    settings->setValue("RemoteLog/Enabled", enabled);
+    settings->setValue("RemoteLog/Target", wsjtxTarget_);
+    settings->setValue("RemoteLog/Decodes", wsjtxDecodes_);
+    settings->remove("WSJTX");   // keys of the early dev builds
 }
 
 // --- Logbook mutations: file, then WebSocket delta, then WSJT-X ---

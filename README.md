@@ -269,6 +269,10 @@ All settings can be passed as CLI flags. Run `wfweb --help` for the full list.
 | `--rigctld-bind-all` | Bind rigctld to all interfaces instead of localhost | localhost only |
 | `--no-rigctld` | Disable rigctld even if enabled in settings | — |
 | `-n --name <tag>` | Name shown in the web UI top bar and browser tab (handy with several instances) | rig model |
+| `--logbook <file>` | ADIF logbook the server keeps (see REST_API.md) | `<data dir>/logbook.adi` |
+| `--remote-log <host[:port]>` | Send every logged QSO to an external logging program (GridTracker, JTAlert, Log4OM… via the WSJT-X UDP protocol) | off |
+| `--no-remote-log` | Disable remote logging even if enabled in settings | — |
+| `--remote-log-decodes` | Also forward FT8/FT4 decodes to the remote logger | — |
 | `--no-autoconnect` | Start without connecting to the rig (LAN only; connect via web UI Reconnect). Env: `WFWEB_NO_AUTOCONNECT=1` | autoconnect |
 
 ### About `--settings`

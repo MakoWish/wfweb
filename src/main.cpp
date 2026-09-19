@@ -228,9 +228,11 @@ int main(int argc, char *argv[])
         "                          later with the web UI Reconnect button). Also enabled\n"
         "                          by setting WFWEB_NO_AUTOCONNECT=1 in the environment\n"
         "  --logbook <file>        QSO logbook (ADIF; default: <data dir>/logbook.adi)\n"
-        "  --wsjtx <host[:port]>   Send WSJT-X UDP messages (default port 2237)\n"
-        "  --no-wsjtx              Disable WSJT-X UDP even if enabled in settings\n"
-        "  --wsjtx-decodes         Also forward FT8/FT4 decodes\n"
+        "  --remote-log <host[:port]>  Send every logged QSO to an external logging\n"
+        "                          program (GridTracker, JTAlert, Log4OM, ...) which\n"
+        "                          listens for the WSJT-X UDP protocol; port 2237 if omitted\n"
+        "  --no-remote-log         Disable remote logging even if enabled in settings\n"
+        "  --remote-log-decodes    Also forward FT8/FT4 decodes to the remote logger\n"
         "  -l --logfile <file>     Log file\n"
         "  -b --background         Run as daemon (not Windows)\n"
         "  -d --debug [file]       Enable verbose debug logging (optionally to file)\n"
@@ -438,13 +440,13 @@ int main(int argc, char *argv[])
             if (argc > c + 1) overrides.logbook = argv[++c];
             else { std::cout << "Error: --logbook requires a file\n"; return -1; }
         }
-        else if (currentArg == "--wsjtx")
+        else if (currentArg == "--remote-log")
         {
-            if (argc > c + 1) overrides.wsjtxTarget = argv[++c];
-            else { std::cout << "Error: --wsjtx requires host[:port]\n"; return -1; }
+            if (argc > c + 1) overrides.remoteLogTarget = argv[++c];
+            else { std::cout << "Error: --remote-log requires host[:port]\n"; return -1; }
         }
-        else if (currentArg == "--no-wsjtx") overrides.noWsjtx = true;
-        else if (currentArg == "--wsjtx-decodes") overrides.wsjtxDecodes = true;
+        else if (currentArg == "--no-remote-log") overrides.noRemoteLog = true;
+        else if (currentArg == "--remote-log-decodes") overrides.remoteLogDecodes = true;
         else if (currentArg == "--lan-control")
         {
             if (argc > c + 1) { overrides.controlPort = QString(argv[++c]).toInt(); }

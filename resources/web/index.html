@@ -2483,12 +2483,13 @@ body.digi-open #bottomBar { grid-row: 5; }
             </div>
             <div class="digi-settings-field" style="margin-top:6px;flex-direction:column;align-items:flex-start;gap:4px">
                 <label style="display:flex;align-items:center;gap:6px;color:#8cf;font-size:12px;cursor:pointer">
-                    <input type="checkbox" id="digiWsjtxEnable">
-                    <span>WSJT-X UDP output (GridTracker, JTAlert, loggers)</span>
+                    <input type="checkbox" id="digiRemoteLogEnable">
+                    <span>Send logged QSOs to an external logging program</span>
                 </label>
-                <input type="text" id="digiWsjtxTarget" class="wf-field" placeholder="host:2237 or 239.255.0.0:2237" style="width:220px">
+                <span style="font-size:10px;color:var(--text-dim)">GridTracker, JTAlert, Log4OM&hellip; anything that listens for the WSJT-X UDP protocol</span>
+                <input type="text" id="digiRemoteLogTarget" class="wf-field" placeholder="host:2237 or 239.255.0.0:2237" style="width:220px">
                 <label style="display:flex;align-items:center;gap:6px;color:#8cf;font-size:11px;cursor:pointer">
-                    <input type="checkbox" id="digiWsjtxDecodes">
+                    <input type="checkbox" id="digiRemoteLogDecodes">
                     <span>Also forward FT8/FT4 decodes</span>
                 </label>
             </div>
@@ -3026,7 +3027,7 @@ var logbookLoading = false;
 var logbookPersistent = true;   // false: the server's file dies with its container; keep a copy here
 var logbookUnexported = 0;      // QSOs without an export stamp ("Download new" candidates)
 var digiLogStatusTimer = null;
-var wsjtxSettings = null;   // last values received from the server, to send only changes
+var remoteLogSettings = null;   // last values received from the server, to send only changes
 var digiLogEditIdx = -1; // index of row currently being edited, -1 = none
 var digiHashBook = null;
 var digiQsoState = 'IDLE';
@@ -3155,14 +3156,14 @@ function handleMessage(msg) {
                 logbookPersistent = !!msg.logbookPersistent;
                 updateDigiLogWarning();
             }
-            if (msg.wsjtxTarget !== undefined) {
-                wsjtxSettings = { enabled: !!msg.wsjtxEnabled, target: msg.wsjtxTarget || '', decodes: !!msg.wsjtxDecodes };
-                var wse = document.getElementById('digiWsjtxEnable');
-                var wst = document.getElementById('digiWsjtxTarget');
-                var wsd = document.getElementById('digiWsjtxDecodes');
-                if (wse) wse.checked = wsjtxSettings.enabled;
-                if (wst) wst.value = wsjtxSettings.target;
-                if (wsd) wsd.checked = wsjtxSettings.decodes;
+            if (msg.remoteLogTarget !== undefined) {
+                remoteLogSettings = { enabled: !!msg.remoteLogEnabled, target: msg.remoteLogTarget || '', decodes: !!msg.remoteLogDecodes };
+                var rle = document.getElementById('digiRemoteLogEnable');
+                var rlt = document.getElementById('digiRemoteLogTarget');
+                var rld = document.getElementById('digiRemoteLogDecodes');
+                if (rle) rle.checked = remoteLogSettings.enabled;
+                if (rlt) rlt.value = remoteLogSettings.target;
+                if (rld) rld.checked = remoteLogSettings.decodes;
             }
             updateRigTag();
             if (msg.freedvModes) freedvModes = msg.freedvModes;
@@ -10964,15 +10965,15 @@ function initDigiHandlers() {
     var settingsCloseBtn = document.getElementById('digiSettingsCloseBtn');
     if (settingsCloseBtn) {
         settingsCloseBtn.addEventListener('click', function() {
-            var wsx = {
-                enabled: !!(document.getElementById('digiWsjtxEnable') || {}).checked,
-                target: ((document.getElementById('digiWsjtxTarget') || {}).value || '').trim(),
-                decodes: !!(document.getElementById('digiWsjtxDecodes') || {}).checked
+            var rl = {
+                enabled: !!(document.getElementById('digiRemoteLogEnable') || {}).checked,
+                target: ((document.getElementById('digiRemoteLogTarget') || {}).value || '').trim(),
+                decodes: !!(document.getElementById('digiRemoteLogDecodes') || {}).checked
             };
-            if (!wsjtxSettings || wsx.enabled !== wsjtxSettings.enabled ||
-                wsx.target !== wsjtxSettings.target || wsx.decodes !== wsjtxSettings.decodes) {
-                wsjtxSettings = wsx;
-                send({ cmd: 'setWsjtx', enabled: wsx.enabled, target: wsx.target, decodes: wsx.decodes });
+            if (!remoteLogSettings || rl.enabled !== remoteLogSettings.enabled ||
+                rl.target !== remoteLogSettings.target || rl.decodes !== remoteLogSettings.decodes) {
+                remoteLogSettings = rl;
+                send({ cmd: 'setRemoteLog', enabled: rl.enabled, target: rl.target, decodes: rl.decodes });
             }
             document.getElementById('digiSettingsModal').classList.remove('visible');
             updateDigiMsgRows();

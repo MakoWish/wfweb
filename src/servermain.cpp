@@ -101,9 +101,9 @@ servermain::servermain(const QString settingsFile, const cmdLineOverrides& overr
         }
         QMetaObject::invokeMethod(web, "configureLogbook", Qt::QueuedConnection,
                                   Q_ARG(QString, cliOverrides.logbook),
-                                  Q_ARG(QString, cliOverrides.wsjtxTarget),
-                                  Q_ARG(bool, cliOverrides.noWsjtx),
-                                  Q_ARG(bool, cliOverrides.wsjtxDecodes));
+                                  Q_ARG(QString, cliOverrides.remoteLogTarget),
+                                  Q_ARG(bool, cliOverrides.noRemoteLog),
+                                  Q_ARG(bool, cliOverrides.remoteLogDecodes));
         connect(queue, SIGNAL(rigCapsUpdated(rigCapabilities*)), web, SLOT(receiveRigCaps(rigCapabilities*)));
         connect(webThread, SIGNAL(finished()), web, SLOT(deleteLater()));
         connect(web, &webServer::requestPowerOn, this, &servermain::powerRigOn);

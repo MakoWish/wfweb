@@ -278,9 +278,10 @@ Server:
   --rigctld-bind-all      Bind rigctld to all interfaces (default localhost)
   --no-rigctld            Disable rigctld even if enabled in settings
   --logbook <file>        ADIF logbook path (default /data/wfweb/wfweb/logbook.adi)
-  --wsjtx <host[:port]>   Emit WSJT-X UDP messages (default port 2237)
-  --no-wsjtx              Disable configured WSJT-X UDP output
-  --wsjtx-decodes         Also emit FT8/FT4 Decode messages
+  --remote-log <host[:port]>  Send logged QSOs to an external logging program
+                          (GridTracker, JTAlert, ... via WSJT-X UDP; port 2237)
+  --no-remote-log         Disable remote logging even if enabled in settings
+  --remote-log-decodes    Also forward FT8/FT4 decodes to the remote logger
 
 Audio:
   --audio-system <id>     Audio backend (0=Qt, 1=PortAudio, 2=RtAudio)
