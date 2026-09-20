@@ -153,6 +153,8 @@ Pre-built binaries are published on [GitHub Releases](../../releases):
 | **Linux ARM64 / Raspberry Pi** | `.deb` (ubuntu2404) | Ubuntu 24.04 Noble |
 | **Linux ARM64 / Raspberry Pi** | `.deb` (debian12) | Raspberry Pi OS Bookworm / Debian 12 |
 | **Linux ARM64 / Raspberry Pi** | `.deb` (debian13) | Raspberry Pi OS Trixie / Debian 13 |
+| **Linux x86_64** | `.AppImage` | Any distro with glibc 2.36 or newer (Debian 12+, Ubuntu 24.04+, Fedora 37+, Arch, openSUSE...) |
+| **Linux ARM64 / Raspberry Pi** | `.AppImage` | Any 64-bit distro with glibc 2.36 or newer |
 | **macOS** | zip | Apple Silicon |
 | **Windows** | zip | x86_64 |
 
@@ -161,6 +163,14 @@ Pre-built binaries are published on [GitHub Releases](../../releases):
 > **debian12** for Debian 12 Bookworm and Raspberry Pi OS Bookworm,
 > **debian13** for Debian 13 Trixie and Raspberry Pi OS Trixie.
 > Each is built natively on its target distro so the library dependencies match.
+
+> **Not on Debian or Ubuntu?** Use the `.AppImage`: `chmod +x` it and run it. It
+> bundles Qt, RADE, codec2 and everything else above glibc. The host only needs
+> glibc 2.36 or newer, the ALSA library (`libasound2`) and OpenSSL 3 (library
+> plus the `openssl` command, used to create the certificate on first start).
+> If it complains about FUSE, run it with `--appimage-extract-and-run`. To start
+> it at boot, point a systemd unit's `ExecStart` at the file (see
+> `systemd/wfweb@.service`).
 
 ---
 

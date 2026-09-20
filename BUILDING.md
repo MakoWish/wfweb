@@ -55,6 +55,16 @@ sudo systemctl enable --now wfweb@$USER
 
 See `.github/workflows/build.yml` for the full packaging steps.
 
+### Build an AppImage
+
+See the `build-linux-appimage` job in `.github/workflows/build.yml`: it builds
+with `qmake wfweb.pro PREFIX=/usr` on Debian 12, installs into an `AppDir`, and
+packages it with linuxdeploy and its Qt plugin, force-bundling the desktop
+libraries that linuxdeploy would leave to a headless host. The binary finds its
+rig files next to itself (`../share/wfview/rigs`), so the bundle is
+self-contained. The job then checks that nothing the headless process loads
+comes from the host except glibc and ALSA, and boots the result once.
+
 ## Windows
 
 ### Prerequisites
