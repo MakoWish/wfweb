@@ -1959,6 +1959,7 @@ void webServer::handleCommand(QWebSocket *client, const QJsonObject &cmd)
             // Memory mode — the front-panel V/M (bare CI-V 08 / FR2). Leave
             // activeVfoLocal alone so a later switch back to VFO returns here.
             if (rigCaps && rigCaps->commands.contains(funcMemoryMode)) {
+                memModeLocal = true;
                 queue->addUnique(priorityImmediate, queueItem(funcSelectVFO, QVariant::fromValue<vfo_t>(vfoMem), false));
                 requestVfoUpdate();
             }
@@ -1980,6 +1981,7 @@ void webServer::handleCommand(QWebSocket *client, const QJsonObject &cmd)
         }
         activeVfoLocal = v;
         activeReceiver = wantB ? 1 : 0;
+        memModeLocal = false;
         queue->addUnique(priorityImmediate, queueItem(funcSelectVFO, QVariant::fromValue<vfo_t>(v), false));
         requestVfoUpdate();
     }
@@ -2411,7 +2413,11 @@ void webServer::handleCommand(QWebSocket *client, const QJsonObject &cmd)
         int start = cmd.contains("start") ? cmd["start"].toInt() : 1;
         int end = cmd.contains("end") ? cmd["end"].toInt() : 99;
         int group = cmd.contains("group") ? cmd["group"].toInt() : 0;
-        memories.clear();
+        // The cached channels stay put while the rig is re-read: a rename
+        // during the scan still finds its source and a client that connects
+        // mid-scan gets the previous picture. Whatever the scan does not
+        // report again is dropped when it completes (scanNextMemory) (#108).
+        memoryScanSeen.clear();
         memoryScanActive = true;
         memoryScanCurrent = start;
         memoryScanEnd = end;
@@ -2423,9 +2429,12 @@ void webServer::handleCommand(QWebSocket *client, const QJsonObject &cmd)
             memoryScanTimer->setInterval(500);
             connect(memoryScanTimer, &QTimer::timeout, this, &webServer::scanNextMemory);
         }
-        // Request first channel
+        // Request first channel. Memory reads and writes are addressed by
+        // channel, so two of them are never duplicates of each other: plain
+        // add(), not addUnique(), which compares command and receiver only
+        // and would evict a queued request for a *different* channel (#108).
         uint val = (uint(group) << 16) | uint(start);
-        queue->addUnique(priorityImmediate, queueItem(funcMemoryContents, QVariant::fromValue<uint>(val), false, 0));
+        queue->add(priorityImmediate, queueItem(funcMemoryContents, QVariant::fromValue<uint>(val), false, 0));
         memoryScanTimer->start();
     }
     else if (type == "recallMemory") {
@@ -2570,7 +2579,7 @@ void webServer::handleCommand(QWebSocket *client, const QJsonObject &cmd)
         mem.dtcsB = mem.dtcs;
         mem.dtcspB = mem.dtcsp;
         mem.duplexB = mem.duplex;
-        queue->addUnique(priorityImmediate, queueItem(funcMemoryContents, QVariant::fromValue<memoryType>(mem), false, 0));
+        queue->add(priorityImmediate, queueItem(funcMemoryContents, QVariant::fromValue<memoryType>(mem), false, 0));
     }
     else if (type == "renameMemory") {
         // Rewrite an existing channel with a new name. The rest of the
@@ -2593,7 +2602,7 @@ void webServer::handleCommand(QWebSocket *client, const QJsonObject &cmd)
         memcpy(mem.name, nb.constData(), size_t(nb.size()));
         mem.del = false;
         memories[key] = mem;
-        queue->addUnique(priorityImmediate, queueItem(funcMemoryContents, QVariant::fromValue<memoryType>(mem), false, 0));
+        queue->add(priorityImmediate, queueItem(funcMemoryContents, QVariant::fromValue<memoryType>(mem), false, 0));
         // Let every client refresh the row without a rescan
         QJsonObject memUpdate;
         memUpdate["type"] = "memoryChannel";
@@ -2621,8 +2630,7 @@ void webServer::handleCommand(QWebSocket *client, const QJsonObject &cmd)
         memset(mem.R1B, 0, sizeof(mem.R1B));
         memset(mem.R2B, 0, sizeof(mem.R2B));
         qCInfo(logWebServer) << "clearMemory: channel=" << ch << "group=" << group;
-        memoryScanActive = false; // Prevent scan from interfering
-        queue->addUnique(priorityImmediate, queueItem(funcMemoryContents, QVariant::fromValue<memoryType>(mem), false, 0));
+        queue->add(priorityImmediate, queueItem(funcMemoryContents, QVariant::fromValue<memoryType>(mem), false, 0));
         quint32 key = (quint32(group) << 16) | ch;
         memories.remove(key);
     }
@@ -3463,16 +3471,20 @@ QJsonObject webServer::buildStatusJson()
     // (IC-7300 etc) funcSelectedFreq/funcUnselectedFreq are keyed by which
     // VFO is currently selected on the radio, NOT by the literal A/B labels —
     // so we have to consult rigState.vfo to map them back to A/B.
+    // In memory mode those caches hold the recalled channel (both of them on
+    // an IC-7300), so the VFO slots are left alone: the browser keeps the
+    // values from before the recall and shows "frequency" instead (#108).
     bool cmd29 = rigCaps && rigCaps->hasCommand29;
+    bool inMem = (queue->getState().vfo == vfoMem);
     if (cmd29) {
         vfoCommandType tA = queue->getVfoCommand(vfoA, 0, false);
         cacheItem freqCacheA = queue->getCache(tA.freqFunc, 0);
-        if (freqCacheA.value.isValid()) {
+        if (freqCacheA.value.isValid() && !inMem) {
             status["vfoAFrequency"] = freqJson(freqCacheA.value.value<freqt>());
         }
         vfoCommandType tB = queue->getVfoCommand(vfoB, 1, false);
         cacheItem freqCacheB = queue->getCache(tB.freqFunc, 1);
-        if (freqCacheB.value.isValid()) {
+        if (freqCacheB.value.isValid() && !inMem) {
             status["vfoBFrequency"] = freqJson(freqCacheB.value.value<freqt>());
         }
         status["selectedVfo"] = (queue->getState().vfo == vfoMem) ? "MEM"
@@ -3482,10 +3494,10 @@ QJsonObject webServer::buildStatusJson()
         cacheItem selCache = queue->getCache(funcSelectedFreq, 0);
         cacheItem unselCache = queue->getCache(funcUnselectedFreq, 0);
         if (!selCache.value.isValid()) selCache = freqCache; // fall back to plain funcFreq
-        if (selCache.value.isValid()) {
+        if (selCache.value.isValid() && !inMem) {
             status[bSelected ? "vfoBFrequency" : "vfoAFrequency"] = freqJson(selCache.value.value<freqt>());
         }
-        if (unselCache.value.isValid()) {
+        if (unselCache.value.isValid() && !inMem) {
             status[bSelected ? "vfoAFrequency" : "vfoBFrequency"] = freqJson(unselCache.value.value<freqt>());
         }
         status["selectedVfo"] = (queue->getState().vfo == vfoMem) ? "MEM"
@@ -3748,14 +3760,19 @@ void webServer::receiveCache(cacheItem item)
         freqt f = item.value.value<freqt>();
         QJsonValue hz = freqJson(f);
         bool cmd29 = rigCaps && rigCaps->hasCommand29;
-        bool isActive;
-        if (cmd29) {
+        bool isActive = cmd29 ? (item.receiver == activeReceiver) : true;
+        if (memModeLocal) {
+            // Memory mode: the operating band reports the recalled channel,
+            // which belongs to neither VFO slot, and the other band's read
+            // answers with the channel too (IC-7300, measured) so it says
+            // nothing about that VFO. Only the operating frequency goes out;
+            // the VFO slots keep what they held before the recall (#108).
+            if (!isActive) return;
+        } else if (cmd29) {
             update[item.receiver == 1 ? "vfoBFrequency" : "vfoAFrequency"] = hz;
-            isActive = (item.receiver == activeReceiver);
         } else {
             bool activeIsB = (activeVfoLocal == vfoB);
             update[activeIsB ? "vfoBFrequency" : "vfoAFrequency"] = hz;
-            isActive = true;
         }
         if (isActive) {
             update["frequency"] = hz;
@@ -3770,6 +3787,7 @@ void webServer::receiveCache(cacheItem item)
         // Non-cmd29 rigs report the inactive VFO's freq via this func.
         // cmd29 rigs use receiver-indexed funcFreq, handled above.
         if (rigCaps && rigCaps->hasCommand29) return;
+        if (memModeLocal) return; // echoes the recalled channel, see funcFreq
         freqt f = item.value.value<freqt>();
         bool activeIsB = (activeVfoLocal == vfoB);
         update[activeIsB ? "vfoAFrequency" : "vfoBFrequency"] = freqJson(f);
@@ -3783,10 +3801,12 @@ void webServer::receiveCache(cacheItem item)
             // Memory mode: report it, but keep activeVfoLocal pointing at the
             // last real VFO so command targeting (and a later switch back to
             // VFO mode) still lands on it.
+            memModeLocal = true;
             update["selectedVfo"] = "MEM";
             break;
         }
         bool isB = (v == vfoB || v == vfoSub);
+        memModeLocal = false;
         activeVfoLocal = v;
         activeReceiver = isB ? 1 : 0;
         update["selectedVfo"] = isB ? "B" : "A";
@@ -3807,12 +3827,14 @@ void webServer::receiveCache(cacheItem item)
     case funcVFOMainSelect:
         activeVfoLocal = (rigCaps && rigCaps->hasCommand29) ? vfoMain : vfoA;
         activeReceiver = 0;
+        memModeLocal = false;
         update["selectedVfo"] = "A";
         break;
     case funcVFOBSelect:
     case funcVFOSubSelect:
         activeVfoLocal = (rigCaps && rigCaps->hasCommand29) ? vfoSub : vfoB;
         activeReceiver = 1;
+        memModeLocal = false;
         update["selectedVfo"] = "B";
         break;
     case funcMode:
@@ -4005,29 +4027,36 @@ void webServer::receiveCache(cacheItem item)
         }
         memoryType mem = item.value.value<memoryType>();
         quint32 key = (quint32(mem.group) << 16) | mem.channel;
-        if (mem.del || (mem.frequency.Hz == 0 && mem.mode == 0)) {
+        bool empty = mem.del || (mem.frequency.Hz == 0 && mem.mode == 0);
+        if (empty) {
             memories.remove(key);
         } else {
             memories[key] = mem;
         }
+        // Anything the running scan hears about its group survives the
+        // reconcile at scan end — including a channel saved or renamed while
+        // the scan was already past it (the write echoes back through the
+        // cache with the contents we sent).
+        if (memoryScanActive && !mem.del && int(mem.group) == memoryScanGroup)
+            memoryScanSeen.insert(key);
         // A reply belongs to the running scan only if it matches the group and
         // channel we are waiting on; a late reply from before a scan restart
         // (e.g. a group switch) must not stop the timer or advance the counter.
-        bool scanReply = memoryScanActive
+        // Our own clear echoes back as a deleted entry and says nothing about
+        // what the rig holds, so it neither stops the timer nor advances the
+        // scan: the rig's own reply, or the 500 ms timeout, does that.
+        bool scanReply = memoryScanActive && !mem.del
                 && int(mem.group) == memoryScanGroup
                 && int(mem.channel) == memoryScanCurrent;
         if (scanReply && memoryScanTimer) memoryScanTimer->stop();
         // Broadcast to clients (only non-empty channels)
-        if (!mem.del && (mem.frequency.Hz != 0 || mem.mode != 0)) {
+        if (!empty) {
             QJsonObject memUpdate;
             memUpdate["type"] = "memoryChannel";
             memUpdate["memory"] = memoryToJson(mem);
             sendJsonToAll(memUpdate);
         }
-        // Continue scan if active (but not for our own write/delete echoed back)
-        if (scanReply && !mem.del) {
-            scanNextMemory();
-        }
+        if (scanReply) scanNextMemory();
         return; // Don't send as generic update
     }
     default:
@@ -4049,6 +4078,7 @@ void webServer::sendPeriodicStatus()
     // because buildStatusJson() reads rigState.vfo directly on every tick.
     if (queue) {
         vfo_t qv = queue->getState().vfo;
+        memModeLocal = (qv == vfoMem);
         if (qv != vfoUnknown && qv != vfoMem && qv != activeVfoLocal) {
             activeVfoLocal = qv;
             activeReceiver = (qv == vfoB || qv == vfoSub) ? 1 : 0;
@@ -4289,6 +4319,14 @@ void webServer::scanNextMemory()
         if (memoryScanTimer) memoryScanTimer->stop();
         QJsonObject done;
         done["type"] = "memoryScanComplete";
+        // Channels of this group the scan did not report were cleared on the
+        // radio, or a write never landed: drop them now the picture is complete.
+        for (auto it = memories.begin(); it != memories.end(); ) {
+            if (int(it.key() >> 16) == memoryScanGroup && !memoryScanSeen.contains(it.key()))
+                it = memories.erase(it);
+            else
+                ++it;
+        }
         // Count only the scanned group — a late reply from a previous scan
         // may have parked an entry under another group's key.
         int count = 0;
@@ -4300,7 +4338,8 @@ void webServer::scanNextMemory()
         return;
     }
     uint val = (uint(memoryScanGroup) << 16) | uint(memoryScanCurrent);
-    queue->addUnique(priorityImmediate, queueItem(funcMemoryContents, QVariant::fromValue<uint>(val), false, 0));
+    // add(), not addUnique(): see the getMemories handler.
+    queue->add(priorityImmediate, queueItem(funcMemoryContents, QVariant::fromValue<uint>(val), false, 0));
     if (memoryScanTimer) memoryScanTimer->start();
 }
 

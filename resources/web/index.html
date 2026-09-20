@@ -1761,6 +1761,7 @@ body.digi-open #bottomBar { grid-row: 5; }
     border-radius: 3px;
 }
 .mem-action-btn:active { background: #048; color: #000; }
+.mem-action-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 /* Write prompt */
 .gain-bar-fill.centered {
     position: absolute; top: 0; height: 100%;
@@ -2300,7 +2301,7 @@ body.digi-open #bottomBar { grid-row: 5; }
                 <div id="memoryList"></div>
             </div>
             <div class="mem-actions">
-                <button class="mem-action-btn" onclick="memorySaveCurrent()" title="Save the current frequency and mode into a memory channel">&#xFF0B; Save</button>
+                <button id="memSaveBtn" class="mem-action-btn" onclick="memorySaveCurrent()" title="Save the current frequency and mode into a memory channel" disabled>&#xFF0B; Save</button>
                 <button class="mem-action-btn" onclick="refreshMemories()">Refresh</button>
             </div>
             <div id="memSaveBar">
@@ -5669,6 +5670,8 @@ var memoryChannels = {};
 var memGroupList = [];       // valid memory-group numbers for this rig ([] = rig has no groups)
 var memCurrentGroup = 0;     // group the browser is currently reading/writing
 var memCapsSeen = null;      // "memGroups/memStart" caps last applied
+var memScanSeen = null;      // keys reported since the running scan started; null = no scan
+var memListReady = false;    // the viewed group has been read through at least once
 
 // Build the group list + selector from rig caps. memGroups is the highest
 // group number, memStart the lowest; a rig with no groups reports
@@ -5680,6 +5683,10 @@ function setupMemoryGroups(memGroups, memStart) {
     var caps = memGroups + '/' + memStart;
     if (caps === memCapsSeen) return;
     memCapsSeen = caps;
+    // Different caps means a different radio: forget its channels.
+    memoryChannels = {};
+    memListReady = false;
+    memSaveBtnSync();
     memGroupList = [];
     for (var g = memStart; g <= memGroups; g++) memGroupList.push(g);
     // Rigs with a single group (IC-7610/7760/785x) don't carry a group byte
@@ -5705,7 +5712,20 @@ function setupMemoryGroups(memGroups, memStart) {
 
 function onMemGroupChange() {
     memCurrentGroup = parseInt(document.getElementById('memGroupSelect').value, 10) || 0;
+    // A different group is a different list: drop the old one rather than
+    // reconciling it, and hold "+ Save" until this group has been read once.
+    memoryChannels = {};
+    memListReady = false;
+    memSaveBtnSync();
     refreshMemories();
+}
+
+// "+ Save" picks its target from memoryChannels, so it stays disabled until
+// the viewed group has been read through once. Rescans keep the last complete
+// picture on screen (see refreshMemories), so the button never goes back off.
+function memSaveBtnSync() {
+    var b = document.getElementById('memSaveBtn');
+    if (b) b.disabled = !memListReady;
 }
 
 function renderMemoryOverlay() {
@@ -5727,9 +5747,17 @@ function closeMemoryModal() {
 }
 
 function refreshMemories() {
-    memoryChannels = {};
-    document.getElementById('memoryList').innerHTML =
-        '<div class="memory-empty">Scanning...</div>';
+    // The last complete picture stays on screen while the rig is re-read: a
+    // scan is one round-trip per channel (10-20 s on a serial rig) and every
+    // save triggers one, so wiping the list here let a second "+ Save"
+    // propose a channel the rescan simply had not reached yet and overwrite
+    // it. Entries the rescan does not report again are dropped when it
+    // completes (handleMemoryScanComplete).
+    memScanSeen = {};
+    if (Object.keys(memoryChannels).length === 0) {
+        document.getElementById('memoryList').innerHTML =
+            '<div class="memory-empty">Scanning...</div>';
+    }
     document.getElementById('memScanStatus').textContent = 'scanning...';
     // Start at 0: zero-based rigs (IC-705/905) have a real channel 0. Rigs
     // whose channels start at 1 just drop the out-of-range first read and
@@ -5823,6 +5851,7 @@ function handleMemoryChannel(msg) {
     // reply's group (0) wouldn't match and would empty the list.
     if (memGroupList.length >= 2 && (mem.group || 0) !== memCurrentGroup) return;
     var key = (mem.group || 0) * 65536 + mem.channel;
+    if (memScanSeen) memScanSeen[key] = true;
     if (mem.del || mem.empty) {
         delete memoryChannels[key];
     } else {
@@ -5836,11 +5865,23 @@ function handleMemoryChannel(msg) {
 
 function handleMemoryScanComplete(msg) {
     if (msg.error) {
+        memScanSeen = null;
         document.getElementById('memScanStatus').textContent = '';
         document.getElementById('memoryList').innerHTML =
             '<div class="memory-empty">' + msg.error + '</div>';
         return;
     }
+    if (memScanSeen) {
+        // Channels the rescan did not report were cleared on the radio, or a
+        // provisional save never landed: drop them now the picture is complete.
+        var keys = Object.keys(memoryChannels);
+        for (var i = 0; i < keys.length; i++) {
+            if (!memScanSeen[keys[i]]) delete memoryChannels[keys[i]];
+        }
+        memScanSeen = null;
+    }
+    memListReady = true;
+    memSaveBtnSync();
     document.getElementById('memScanStatus').textContent =
         msg.count ? msg.count + ' found' : '';
     if (document.getElementById('memoryOverlay').classList.contains('visible')) renderMemoryList();
@@ -5865,6 +5906,7 @@ function nextFreeMemoryChannel() {
 // "146.955 FM" (short enough for the 10-char name fields; rename with the
 // pencil afterwards).
 function memorySaveCurrent() {
+    if (!memListReady) return; // button is disabled until the first scan completes
     document.getElementById('memSaveCh').value = nextFreeMemoryChannel();
     document.getElementById('memSaveBar').classList.add('visible');
 }
@@ -5881,6 +5923,14 @@ function memorySaveConfirm() {
         name = (lastShownFreq / 1e6).toFixed(3) + ' ' + (currentMode || '');
     }
     send({ cmd: 'writeMemory', channel: ch, group: memCurrentGroup, name: name.trim() });
+    // Show the channel at once and keep it out of the next "+ Save" proposal.
+    // The rescan below replaces it with what the rig actually stored, or
+    // drops it if the write was refused.
+    memoryChannels[memCurrentGroup * 65536 + ch] = {
+        channel: ch, group: memCurrentGroup, name: name.trim(),
+        frequency: lastShownFreq, mode: currentMode,
+    };
+    renderMemoryList();
     memorySaveCancel();
     setTimeout(refreshMemories, 500);
 }

@@ -275,6 +275,11 @@ private:
     // reconciled from queue->getState() inside sendPeriodicStatus().
     vfo_t activeVfoLocal = vfoA;
     uchar activeReceiver = 0;
+    // Mirror of "the rig is in memory mode", kept next to activeVfoLocal for
+    // the same reason: receiveCache() must not call queue->getState(). In
+    // memory mode the frequency replies describe the recalled channel, not
+    // either VFO, so they must not land in the browser's VFO A/B slots (#108).
+    bool memModeLocal = false;
 
     // SSL
     bool sslEnabled = false;
@@ -604,6 +609,7 @@ private:
 
     // Memory channel scanning
     QMap<quint32, memoryType> memories;  // key = (group << 16) | channel
+    QSet<quint32> memoryScanSeen;         // keys reported by the running scan
     bool memoryScanActive = false;
     int memoryScanCurrent = 0;
     int memoryScanEnd = 0;

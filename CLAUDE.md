@@ -171,6 +171,11 @@ modeInfo.data = 0;
 
 // modeInfo.filter should default to 1 (FIL1)
 modeInfo.filter = 1;
+
+// EXCEPTION: funcMemoryContents is addressed by channel, so two of them are
+// never duplicates. Use add() — addUnique() compares command+receiver only
+// and would evict a queued read/write for a *different* channel (#108).
+queue->add(priorityImmediate, queueItem(funcMemoryContents, QVariant::fromValue<memoryType>(mem), false, 0));
 ```
 
 ---
