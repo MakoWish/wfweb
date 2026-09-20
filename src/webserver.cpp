@@ -948,6 +948,11 @@ void webServer::handleRestRequest(QTcpSocket *socket, const QString &method,
         }
         return;
     }
+    if (p == "/api/v1/logbook/worked") {
+        if (method != "GET") { sendRestResponse(socket, 405, QJsonObject{{"error", "Method not allowed"}}); return; }
+        sendRestResponse(socket, 200, QJsonObject{{"calls", logbook_.workedCalls()}, {"total", logbook_.count()}});
+        return;
+    }
     if (p == "/api/v1/logbook/export") {
         // The "download new QSOs" document plus the ids it contains, taken
         // together so the client can confirm exactly what it saved.

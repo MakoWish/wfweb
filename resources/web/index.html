@@ -1115,6 +1115,19 @@ body.digi-open #bottomBar { grid-row: 5; }
 .digi-decode-row.digi-tx-pending .digi-decode-msg { color: #88a; font-style: italic; }
 .digi-logged-row { background: #001800; border-left: 3px solid #0c0; color: #0d0; padding: 2px 6px; font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.5px; }
 .digi-decode-row.digi-tx-pending .digi-decode-snr { color: #666; }
+/* DXCC entity column + worked-before hints (dxcc.js + the logbook).  The
+   entity column is desktop-only (hidden with .digi-decode-freq on phones). */
+.digi-decode-star { flex: 0 0 auto; font-size: 11px; line-height: 1; cursor: help; }
+.digi-decode-star.new-one  { color: #ffc83d; text-shadow: 0 0 3px rgba(255, 200, 60, .55); }
+.digi-decode-star.new-band { color: #b8c2cf; }
+.digi-decode-ent { flex: 0 0 auto; max-width: 96px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+                   color: #6d86a0; font-size: 10px; text-align: right; }
+.digi-rx-panel.no-entity .digi-decode-ent, .digi-directed-panel.no-entity .digi-decode-ent { display: none; }
+.digi-decode-row.worked:not(.directed) .digi-decode-msg { color: #7d93a8; font-weight: normal; }
+.digi-decode-row.worked:not(.directed) .digi-decode-freq { opacity: .6; }
+.digi-ent-hide { float: right; color: #6d86a0; cursor: pointer; visibility: hidden; letter-spacing: 0.5px; }
+.digi-ent-hide:hover { color: #fff; }
+.digi-decode-col:hover .digi-ent-hide { visibility: visible; }
 .digi-slot-divider { border-top: 1px solid var(--mode-accent-dim); margin: 4px 0 2px 0; padding: 2px 6px; text-align: center; }
 .digi-slot-divider .digi-slot-time { color: var(--mode-accent); font-size: 10px; font-weight: bold; }
 .digi-decode-time { color: #556; min-width: 36px; font-size: 10px; }
@@ -2026,6 +2039,7 @@ body.digi-open #bottomBar { grid-row: 5; }
     /* All Decodes panel: keep SNR, hide dt and Hz */
     #digiRxPanel .digi-decode-dt,
     #digiRxPanel .digi-decode-freq { display: none; }
+    .digi-decode-ent, .digi-ent-hide { display: none; }
     /* Phone: two columns don't fit — the Directed pane collapsed to one
        clipped line under the QSO message rows, and decodes squeezed into
        half the width. Show one pane at a time, full width, picked by the
@@ -2390,7 +2404,7 @@ body.digi-open #bottomBar { grid-row: 5; }
                 </div>
                 <!-- Left: All Decodes -->
                 <div class="digi-decode-col">
-                    <div class="digi-col-header">All Decodes</div>
+                    <div class="digi-col-header">All Decodes<span class="digi-ent-hide" title="Hide the entity column (Station Settings brings it back)" onclick="setDigiEntityCol(false)">ENTITY &#x2715;</span></div>
                     <div id="digiRxPanel" class="digi-rx-panel"></div>
                 </div>
                 <!-- Right: Directed (top) + QSO Messages (bottom) -->
@@ -2468,6 +2482,18 @@ body.digi-open #bottomBar { grid-row: 5; }
                     <span class="digi-field-label">SECTION:</span>
                     <select id="digiFdSectionSel" class="wf-field" title="ARRL/RAC section"></select>
                 </div>
+            </div>
+            <div class="digi-settings-field" style="margin-top:6px">
+                <label style="display:flex;align-items:center;gap:6px;color:#8cf;font-size:12px;cursor:pointer">
+                    <input type="checkbox" id="digiEntityCol">
+                    <span>DXCC entity column in decodes</span>
+                </label>
+            </div>
+            <div class="digi-settings-field">
+                <label style="display:flex;align-items:center;gap:6px;color:#8cf;font-size:12px;cursor:pointer">
+                    <input type="checkbox" id="digiWorkedHints">
+                    <span>Worked-before hints (<span style="color:#ffc83d">&#9733;</span> new one, <span style="color:#b8c2cf">&#9733;</span> new on this band, worked stations dimmed)</span>
+                </label>
             </div>
             <div class="digi-settings-field" style="margin-top:6px">
                 <label style="display:flex;align-items:center;gap:6px;color:#8cf;font-size:12px;cursor:pointer">
@@ -3377,6 +3403,7 @@ function handleMessage(msg) {
             updatePskReporterStatus(msg);
             break;
         case 'logbook':
+            loadWorkedIndex();
             // Summary only (on connect, and after clear / merge / import):
             // the log is paged over REST, so reload the first page.
             logbookTotal = msg.count || 0;
@@ -3386,6 +3413,7 @@ function handleMessage(msg) {
             migrateBrowserLog();
             break;
         case 'logbookMerged':
+            loadWorkedIndex();
             // The server has our browser-local copy.  Drop it only if the
             // server's storage outlives its container; otherwise it stays
             // here as the backup and is re-sent on the next connect.
@@ -3395,6 +3423,7 @@ function handleMessage(msg) {
             if (msg.unexported !== undefined) { logbookUnexported = msg.unexported; updateDigiLogFooter(); }
             break;
         case 'qsoAdded': {
+            if (msg.qso) digiWorkedAdd(msg.qso.call, msg.qso.band);
             if (msg.count !== undefined) logbookTotal = msg.count;
             if (msg.unexported !== undefined) logbookUnexported = msg.unexported;
             var ai = insertQsoSorted(msg.qso);
@@ -3402,6 +3431,7 @@ function handleMessage(msg) {
             break;
         }
         case 'qsoUpdated': {
+            loadWorkedIndex();
             var ui = findQsoIdx(msg.qso && msg.qso.id);
             if (ui >= 0) {
                 if (digiLogEditIdx === ui) digiLogEditIdx = -1;
@@ -3414,6 +3444,7 @@ function handleMessage(msg) {
             break;
         }
         case 'qsoDeleted': {
+            loadWorkedIndex();
             if (msg.count !== undefined) logbookTotal = msg.count;
             if (msg.unexported !== undefined) logbookUnexported = msg.unexported;
             var di = findQsoIdx(msg.id);
@@ -8748,6 +8779,118 @@ function triggerDigiDecode() {
     }
 }
 
+// ---- DXCC entity + worked-before hints ------------------------------------
+// dxcc.js maps a callsign to its DXCC entity; the logbook says what has been
+// worked.  Each decode row gets the sender's entity (desktop-only column), a
+// gold star for a never-worked entity, a silver one for an entity not yet
+// worked on the current band, and a dimmed message for a station already
+// worked on this band.  Both hints are optional (Station Settings).
+var digiShowEntity = true;
+var digiWorkedHints = true;
+try {
+    digiShowEntity = localStorage.getItem('digiEntityCol') !== '0';
+    digiWorkedHints = localStorage.getItem('digiWorkedHints') !== '0';
+} catch(e) {}
+var digiWorked = { calls: {}, ents: {} };   // CALL -> {BAND: 1}, entity name -> {BAND: 1}
+var digiWorkedReady = false;                // false until the logbook has been folded in
+
+function digiWorkedReset() { digiWorked = { calls: {}, ents: {} }; }
+
+function digiWorkedAdd(call, band) {
+    call = (call || '').toUpperCase().trim();
+    if (!call) return;
+    band = (band || '').toUpperCase() || '?';
+    (digiWorked.calls[call] = digiWorked.calls[call] || {})[band] = 1;
+    var e = window.dxccLookup ? dxccLookup(call) : null;
+    if (e) (digiWorked.ents[e.name] = digiWorked.ents[e.name] || {})[band] = 1;
+}
+
+// The sender of a decoded FT8/FT4 message ("CQ [mod] CALL GRID", "A B rpt"),
+// or '' when the message has none we can trust (free text, telemetry).
+function digiSenderCall(msg) {
+    var parts = (msg || '').trim().toUpperCase().split(/\s+/);
+    var tok = '';
+    if (parts[0] === 'CQ' || parts[0] === 'QRZ' || parts[0] === 'DE') {
+        // Skip modifiers without digits (DX, POTA, FD...) and grids (FN42).
+        for (var p = 1; p < parts.length; p++) {
+            if (/\d/.test(parts[p]) && !/^[A-R]{2}\d{2}$/.test(parts[p])) { tok = parts[p]; break; }
+        }
+    } else if (parts.length >= 2) {
+        tok = parts[1];
+    }
+    return tok.replace(/^<(.*)>$/, '$1');
+}
+
+// Hints for one decode: sender call, its entity, which star (if any) and
+// whether the station is already in the log on the current band.
+function digiDecodeHints(msg) {
+    var out = { call: '', ent: null, star: '', worked: false, title: '' };
+    if (!window.dxccLookup) return out;
+    out.call = digiSenderCall(msg);
+    if (!out.call) return out;
+    out.ent = dxccLookup(out.call);
+    if (!digiWorkedHints || !digiWorkedReady) return out;
+    var band = freqToBand(vfoAFreq || currentFreq || 0) || '?';
+    var wc = digiWorked.calls[out.call];
+    out.worked = !!(wc && wc[band]);
+    if (out.ent) {
+        var we = digiWorked.ents[out.ent.name];
+        if (!we) {
+            out.star = 'new-one';
+            out.title = 'New one: ' + out.ent.name + ' has never been worked';
+        } else if (!we[band]) {
+            out.star = 'new-band';
+            out.title = 'New on ' + band + ': ' + out.ent.name + ' worked before, but not on this band';
+        }
+    }
+    return out;
+}
+
+function digiHintSpans(h) {
+    var s = '';
+    if (h.star) s += '<span class="digi-decode-star ' + h.star + '" title="' + escapeHtml(h.title) + '">&#9733;</span>';
+    if (h.ent) s += '<span class="digi-decode-ent" title="' + escapeHtml(h.ent.name + ' (' + h.ent.prefix + ')') + '">' + escapeHtml(h.ent.name) + '</span>';
+    return s;
+}
+
+function applyDigiHintPrefs() {
+    ['digiRxPanel', 'digiDirectedPanel'].forEach(function(id) {
+        var el = document.getElementById(id);
+        if (el) el.classList.toggle('no-entity', !digiShowEntity);
+    });
+    var hide = document.querySelector('.digi-ent-hide');
+    if (hide) hide.style.display = digiShowEntity ? '' : 'none';
+    var c1 = document.getElementById('digiEntityCol');
+    var c2 = document.getElementById('digiWorkedHints');
+    if (c1) c1.checked = digiShowEntity;
+    if (c2) c2.checked = digiWorkedHints;
+}
+
+function setDigiEntityCol(on) {
+    digiShowEntity = !!on;
+    try { localStorage.setItem('digiEntityCol', on ? '1' : '0'); } catch(e) {}
+    applyDigiHintPrefs();
+}
+
+function setDigiWorkedHints(on) {
+    digiWorkedHints = !!on;
+    try { localStorage.setItem('digiWorkedHints', on ? '1' : '0'); } catch(e) {}
+    applyDigiHintPrefs();
+    renderDigiDecodes();
+}
+
+// Server build: the logbook lives on the server; fold its call/band summary
+// in once at connect, add QSOs as they are logged, and refetch on edits.
+function loadWorkedIndex() {
+    fetch('/api/v1/logbook/worked').then(function(r) { return r.json(); }).then(function(j) {
+        digiWorkedReset();
+        var calls = j.calls || {};
+        for (var c in calls) for (var b = 0; b < calls[c].length; b++) digiWorkedAdd(c, calls[c][b]);
+        digiWorkedReady = true;
+        renderDigiDecodes();
+    }).catch(function(e) { console.warn('[DIGI] worked index:', e); });
+}
+
 function renderDigiDecodes() {
     var panel = document.getElementById('digiRxPanel');
     if (!panel) return;
@@ -8767,14 +8910,15 @@ function renderDigiDecodes() {
         var rparts = d.msg.trim().split(/\s+/);
         var isDirected = myCall && rparts.length >= 2 && rparts[0].toUpperCase() === myCall.toUpperCase();
         var isMentioned = !isDirected && myCall && d.msg.toUpperCase().indexOf(myCall) >= 0;
-        var rowCls = 'digi-decode-row' + (isCq ? ' cq-row' : '') + (isDirected ? ' directed' : isMentioned ? ' highlight' : '');
+        var hints = digiDecodeHints(d.msg);
+        var rowCls = 'digi-decode-row' + (isCq ? ' cq-row' : '') + (isDirected ? ' directed' : isMentioned ? ' highlight' : '') + (hints.worked ? ' worked' : '');
         var snrStr = (d.snr >= 0 ? '+' : '') + d.snr.toFixed(0);
         var dtStr  = (d.dt  >= 0 ? '+' : '') + d.dt.toFixed(1);
         html += '<div class="' + rowCls + '" data-msg="' + encodeURIComponent(d.msg) + '" data-slot="' + (d.slotIndex || 0) + '" data-freq="' + Math.round(d.freq) + '" data-snr="' + d.snr + '" onclick="digiRowClick(this)" ondblclick="digiRowDblClick(this)">' +
             '<span class="digi-decode-snr">'  + snrStr + '</span>' +
             '<span class="digi-decode-dt">'   + dtStr  + '</span>' +
             '<span class="digi-decode-freq">'  + Math.round(d.freq) + '</span>' +
-            '<span class="digi-decode-msg">'   + escapeHtml(d.msg) + '</span>' +
+            '<span class="digi-decode-msg">'   + escapeHtml(d.msg) + '</span>' + digiHintSpans(hints) +
             '</div>';
     }
     panel.innerHTML = html;
@@ -8841,7 +8985,8 @@ function appendDigiDirectedRow(d, isTx) {
     var dMyCall = getMyCall();
     var dParts = (d.msg || '').trim().toUpperCase().split(/\s+/);
     var dDirected = !isTx && dMyCall && dParts.length >= 2 && dParts[0] === dMyCall.toUpperCase();
-    var rowCls = 'digi-decode-row ' + (isTx ? 'tx-row' : (dDirected ? 'directed' : 'highlight'));
+    var dHints = isTx ? { star: '', ent: null, worked: false } : digiDecodeHints(d.msg);
+    var rowCls = 'digi-decode-row ' + (isTx ? 'tx-row' : (dDirected ? 'directed' : 'highlight')) + (dHints.worked ? ' worked' : '');
     var div = document.createElement('div');
     div.className = rowCls;
     div.setAttribute('data-msg', encodeURIComponent(d.msg));
@@ -8854,7 +8999,7 @@ function appendDigiDirectedRow(d, isTx) {
         '<span class="digi-decode-snr">'   + snrStr  + '</span>' +
         '<span class="digi-decode-dt">'    + dtStr   + '</span>' +
         '<span class="digi-decode-freq">'  + freqStr + '</span>' +
-        '<span class="digi-decode-msg">'   + escapeHtml(d.msg) + '</span>';
+        '<span class="digi-decode-msg">'   + escapeHtml(d.msg) + '</span>' + digiHintSpans(dHints);
     panel.appendChild(div);
     panel.scrollTop = panel.scrollHeight;
 }
@@ -9728,6 +9873,11 @@ function initDigiFieldDaySettings() {
         updateDigiMsgRows();
     }
     enCb.addEventListener('change', applyMode);
+    var entCb = document.getElementById('digiEntityCol');
+    var hintCb = document.getElementById('digiWorkedHints');
+    if (entCb) entCb.addEventListener('change', function() { setDigiEntityCol(entCb.checked); });
+    if (hintCb) hintCb.addEventListener('change', function() { setDigiWorkedHints(hintCb.checked); });
+    applyDigiHintPrefs();
     ntxEl.addEventListener('input', syncClass);
     clsEl.addEventListener('change', syncClass);
     secEl.addEventListener('change', function() {
@@ -10296,6 +10446,11 @@ function freqToBand(hz) {
     if (hz >= 24890000 && hz < 24990000) return '12M';
     if (hz >= 28000000 && hz < 29700000) return '10M';
     if (hz >= 50000000 && hz < 54000000) return '6M';
+    if (hz >= 70000000 && hz < 71000000) return '4M';
+    if (hz >= 144000000 && hz < 148000000) return '2M';
+    if (hz >= 222000000 && hz < 225000000) return '1.25M';
+    if (hz >= 420000000 && hz < 450000000) return '70CM';
+    if (hz >= 1240000000 && hz < 1300000000) return '23CM';
     return '';
 }
 
@@ -11284,6 +11439,7 @@ window.dispatchEvent(new Event('ft8tsReady'));
 <script src="cw-decoder-utils.js"></script>
 <script src="cw-decoder.js"></script>
 <script src="ctcss.js"></script>
+<script src="dxcc.js"></script>
 <script src="packet.js"></script>
 </body>
 </html>

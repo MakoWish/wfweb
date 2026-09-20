@@ -207,3 +207,23 @@ def test_logbook_export_bookkeeping(rest_url):
     imp2 = requests.post(f"{base}/adif", params={"new": 1}, data=doc2, timeout=5).json()
     assert imp2["added"] == 1 and imp2["unexported"] == 2
     _clear(base)
+
+
+def test_logbook_worked_summary(rest_url):
+    """/logbook/worked folds the whole log into call -> bands (the FT8 panel's
+    "new one" / "new on this band" hints)."""
+    base = _base(rest_url)
+    _clear(base)
+    for call, date, freq, band in [("iz1abc", "20260101", 14074000, "20M"),
+                                   ("IZ1ABC", "20260102", 7074000, "40M"),
+                                   ("IZ1ABC", "20260103", 14074000, "20M"),   # same band twice
+                                   ("K1ABC", "20260104", 14074000, "20M")]:
+        r = requests.post(base, json=_qso(call, date, "120000", freq=freq, band=band), timeout=5)
+        assert r.status_code == 202
+    worked = requests.get(base + "/worked", timeout=5).json()
+    assert worked["total"] == 4
+    assert sorted(worked["calls"]["IZ1ABC"]) == ["20M", "40M"]
+    assert worked["calls"]["K1ABC"] == ["20M"]
+    assert requests.post(base + "/worked", json={}, timeout=5).status_code == 405
+    _clear(base)
+    assert requests.get(base + "/worked", timeout=5).json() == {"calls": {}, "total": 0}

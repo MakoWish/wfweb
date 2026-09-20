@@ -110,6 +110,11 @@ public:
     // page, empty = start from the newest), optionally only those with the
     // given callsign.
     Page page(int limit, const QString &before, const QString &call) const;
+    // Every distinct callsign with the bands it was worked on, as
+    // {"K1ABC": ["20M", "40M"], ...}.  One pass over the log; the browser
+    // derives its "new one" / "new on this band" hints from this rather than
+    // paging through 100k records.
+    QJsonObject workedCalls() const;
 
 private:
     int insertSorted(const QsoRecord &r);

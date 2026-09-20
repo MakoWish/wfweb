@@ -5,6 +5,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QHash>
+#include <QJsonArray>
 #include <QRegularExpression>
 #include <QSaveFile>
 #include <QSet>
@@ -495,6 +496,21 @@ QByteArray Logbook::toAdif(bool unexportedOnly, bool appFields) const
     for (const QsoRecord &r : records_)
         if (!unexportedOnly || r.exported.isEmpty())
             out += r.toAdif(appFields);
+    return out;
+}
+
+QJsonObject Logbook::workedCalls() const
+{
+    QHash<QString, QStringList> bands;
+    for (const QsoRecord &r : records_) {
+        if (r.call.isEmpty()) continue;
+        QStringList &list = bands[r.call];
+        const QString band = r.band.isEmpty() ? QStringLiteral("?") : r.band;
+        if (!list.contains(band)) list.append(band);
+    }
+    QJsonObject out;
+    for (auto it = bands.cbegin(); it != bands.cend(); ++it)
+        out.insert(it.key(), QJsonArray::fromStringList(it.value()));
     return out;
 }
 

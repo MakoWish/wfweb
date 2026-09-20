@@ -82,6 +82,7 @@ lifetime log stays cheap for the browser and the server alike.
 | `PUT` | `/api/v1/logbook/{id}` | Replace an entry (the id is kept) |
 | `DELETE` | `/api/v1/logbook/{id}` | Delete an entry |
 | `GET` | `/api/v1/logbook/adif` | Download the complete ADIF file |
+| `GET` | `/api/v1/logbook/worked` | Distinct callsigns with the bands each was worked on (`{"calls": {"K1ABC": ["20M", "40M"]}, "total": N}`); the browser's "new one" hints come from this |
 | `GET` | `/api/v1/logbook/adif?new=1` | Only the QSOs not yet exported, as plain ADIF (no `APP_WFWEB_*` fields) |
 | `GET` | `/api/v1/logbook/export` | `{"count","ids":[...],"adif":"..."}`: the same document plus the ids it contains |
 | `POST` | `/api/v1/logbook/exported` | `{"ids":[...]}`: stamp those QSOs as exported |
