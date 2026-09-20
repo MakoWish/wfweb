@@ -300,8 +300,11 @@
             };
 
             // Dual-VFO read mode, derived from rig caps in _finalizeDetection.
-            // 'cmd29'              — IC-7610 / IC-785x / IC-7760: read both
-            //                        receivers via 0x29 0x00 0x03 / 0x29 0x01 0x03
+            // 'cmd29'              — IC-7610 / IC-785x / IC-7760 / IC-7600:
+            //                        Main/Sub rigs, read both bands via
+            //                        0x25 0x00 / 0x25 0x01 (fixed Main/Sub,
+            //                        not selected/unselected), select them
+            //                        with 07 D0 / 07 D1
             // 'selectedUnselected' — IC-7300 / IC-705 / IC-7100 / IC-905 /
             //                        IC-9700 / IC-7300MK2: read both VFOs via
             //                        0x25 0x00 / 0x25 0x01
@@ -632,10 +635,10 @@
                     }
                     var wasMem = this.state.selectedVfo === 'MEM';
                     this._setSelectedVfo(vfo);
-                    this._enqueue('selectVFO', civ.cmdSelectVFO(vfo));
+                    this._enqueue('selectVFO', civ.cmdSelectVFO(vfo, this._dualVfoMode === 'cmd29'));
                     // Re-pull both VFOs so the side display flips to the new
                     // "other" VFO and the main display ends up matching the
-                    // rig. The 0x25 / 0x29 replies will land in
+                    // rig. The 0x25 replies will land in
                     // _applyVfoFreq and update the SPA.
                     this._enqueueDualVfoReads();
                     // Back from a memory channel the VFO's own mode / tone /
@@ -651,7 +654,7 @@
                     this._enqueueDualVfoReads();
                     return;
                 case 'equalizeVFO':
-                    this._enqueue('equalizeVFO', civ.cmdEqualizeVFO());
+                    this._enqueue('equalizeVFO', civ.cmdEqualizeVFO(this._dualVfoMode === 'cmd29'));
                     this._enqueueDualVfoReads();
                     return;
                 case 'setTxMeter':
@@ -1543,6 +1546,20 @@
             var su = civ.parseSelectedUnselectedFreqReply(payload);
             if (su !== null && su.hz > 0) {
                 this._lastFreqStamp = Date.now();
+                if (this._dualVfoMode === 'cmd29') {
+                    // Main/Sub rigs: the byte is the band, not "selected".
+                    // 0x00 is always Main ('A'), 0x01 always Sub ('B'). In
+                    // memory mode the operating band shows the recalled
+                    // channel and belongs to neither VFO slot.
+                    var band = su.selected ? 'A' : 'B';
+                    var operating = inMem ? this._lastRealVfo : (this.state.selectedVfo || 'A');
+                    if (inMem) {
+                        if (band === operating) this._applyMemFreq(su.hz);
+                        return;
+                    }
+                    this._applyVfoFreq(band, su.hz, band === operating);
+                    return;
+                }
                 if (inMem) {
                     if (su.selected) this._applyMemFreq(su.hz);
                     return;
@@ -2493,7 +2510,7 @@
             }, 1000);
             // Slow refresh of the unselected/Sub VFO so dial motion on the
             // *other* VFO eventually shows up in the side display. The rig
-            // doesn't push unsolicited 0x25 0x01 / 0x29 0x01 frames on its
+            // doesn't push unsolicited 0x25 0x01 frames on its
             // own — without this, the side stays stale forever.
             if (this._dualVfoMode !== 'single') {
                 this._otherVfoPollTimer = setInterval(() => {

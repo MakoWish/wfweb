@@ -184,11 +184,13 @@
     function cmdReadSelectedFreq()   { return new Uint8Array([0x25, 0x00]); }
     function cmdReadUnselectedFreq() { return new Uint8Array([0x25, 0x01]); }
 
-    // Read Main / Sub frequency on cmd29 rigs (IC-7610, IC-785x, IC-7760).
-    // The 0x29 0xRR prefix scopes the next CI-V command to receiver RR
-    // (0=Main, 1=Sub), so 0x29 0xRR 0x03 reads that receiver's freq.
-    function cmdReadMainFreq() { return new Uint8Array([0x29, 0x00, 0x03]); }
-    function cmdReadSubFreq()  { return new Uint8Array([0x29, 0x01, 0x03]); }
+    // Read Main / Sub frequency on Main/Sub rigs (IC-7610 / IC-785x /
+    // IC-7760 / IC-7600 fw 2.00): 0x25
+    // takes the band as its first byte, 0x00 = Main, 0x01 = Sub. The IC-7600
+    // has no 0x29 prefix at all, so this is the one form every Main/Sub rig
+    // answers, and the one the server build uses on all of them.
+    function cmdReadMainFreq() { return new Uint8Array([0x25, 0x00]); }
+    function cmdReadSubFreq()  { return new Uint8Array([0x25, 0x01]); }
 
     function cmdSetFrequency(hz, numBytes) {
         numBytes = numBytes || (hz >= 1e10 ? 6 : 5);
@@ -508,12 +510,17 @@
     }
 
     // ---------- VFO ops (cmd 0x07) ---------------------------------------
-    function cmdSelectVFO(letter) {
-        // 'A' -> 0x07 0x00, 'B' -> 0x07 0x01
-        return new Uint8Array([0x07, letter === 'B' ? 0x01 : 0x00]);
+    // A/B rigs: 'A' -> 07 00, 'B' -> 07 01. Main/Sub rigs (IC-7610 / IC-785x /
+    // IC-7760 / IC-7600) have no VFO A/B at all: 'A' is the Main band (07 D0)
+    // and 'B' the Sub band (07 D1), the same mapping the server build uses.
+    function cmdSelectVFO(letter, mainSub) {
+        var b = letter === 'B';
+        return new Uint8Array([0x07, mainSub ? (b ? 0xD1 : 0xD0) : (b ? 0x01 : 0x00)]);
     }
+    // 07 B0 exchanges the two on both families; equalize is 07 A0 (A=B) on
+    // A/B rigs and 07 B1 (Main=Sub) on Main/Sub rigs.
     function cmdSwapVFO()      { return new Uint8Array([0x07, 0xB0]); }
-    function cmdEqualizeVFO()  { return new Uint8Array([0x07, 0xA0]); }
+    function cmdEqualizeVFO(mainSub) { return new Uint8Array([0x07, mainSub ? 0xB1 : 0xA0]); }
 
     // ---------- Tuner (cmd 0x1C 0x01) ------------------------------------
     // value: 0 = off, 1 = on, 2 = start tune
