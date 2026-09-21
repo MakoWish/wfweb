@@ -5782,6 +5782,14 @@ function renderMemoryList() {
         row.className = 'memory-row' + (isCurrent ? ' current' : '');
         row.setAttribute('data-key', keys[i]);
         var name = (mem.name || '').trim();
+        // "+ Save" labels a channel with its own frequency and mode
+        // ("14.200 USB"), and the rig may truncate that to its name field.
+        // Shown as a name it just restates the line below it, and reads like
+        // a second, differently formatted frequency — so drop it and let the
+        // row show the frequency alone. A name the operator typed is kept
+        // (#108).
+        var autoLabel = ((mem.frequency || 0) / 1e6).toFixed(3) + ' ' + (mem.mode || '');
+        if (name.length >= 8 && autoLabel.indexOf(name) === 0) name = '';
         var sub = formatMemFreq(mem.frequency) + ' \u00b7 ' + (mem.mode || '?');
         var toneBadge = memToneBadge(mem);
         if (toneBadge) sub += ' \u00b7 ' + toneBadge;
@@ -5946,6 +5954,7 @@ function startMemoryRename(row, m) {
     input.type = 'text';
     input.maxLength = 16;
     input.className = 'mem-rename-input';
+    input.placeholder = 'channel name';
     input.value = (m.name || '').trim();
     main.innerHTML = '';
     main.appendChild(input);
@@ -6169,6 +6178,12 @@ function updateMemPanelVfoRow() {
         var el = document.getElementById(segs[k]);
         if (el) el.classList.toggle('active', currentVfo === k);
     }
+    // A Main/Sub rig (IC-7600/7610/785x/7760) has no VFO A/B at all, so name
+    // the two bands the way the radio and the VFO tile do (#108).
+    var segA = document.getElementById('memVfoA');
+    var segB = document.getElementById('memVfoB');
+    if (segA) segA.textContent = hasMainSub ? 'MAIN' : 'VFO A';
+    if (segB) segB.textContent = hasMainSub ? 'SUB'  : 'VFO B';
     var memBtn = document.getElementById('memVfoMem');
     if (memBtn) {
         memBtn.style.display = hasMemoryMode ? '' : 'none';
