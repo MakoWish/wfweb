@@ -2458,6 +2458,23 @@ void webServer::handleCommand(QWebSocket *client, const QJsonObject &cmd)
         int group = cmd.contains("group") ? cmd["group"].toInt() : 0;
         // Channel 0 is real on zero-based rigs (IC-705/905)
         if (ch < 0 || (ch == 0 && rigCaps->memStart != 0)) return;
+        // Everything below is captured from the band the operator is actually
+        // on. On a Main/Sub rig (IC-7600/7610/785x/7760) the two bands have
+        // their own caches, indexed by receiver, so a write from SUB that
+        // reads receiver 0 stores MAIN's frequency and mode instead (#108).
+        // A/B rigs have one receiver and reach the selected VFO through
+        // funcSelectedFreq/Mode, so rx stays 0 and nothing changes for them.
+        bool memCmd29 = rigCaps->hasCommand29;
+        uchar memRx = memCmd29 ? (queue->getState().vfo == vfoSub ? 1 : 0) : 0;
+        // A cache is only keyed by receiver when the rig scopes that command
+        // with the 0x29 prefix. Commands it does not scope — every command on
+        // the IC-7600, which has no 0x29 at all — always answer under
+        // receiver 0, so asking for receiver 1 would miss them entirely.
+        auto memCacheRx = [&](funcs f) -> uchar {
+            if (!memCmd29 || memRx == 0) return 0;
+            auto it = rigCaps->commands.find(f);
+            return (it != rigCaps->commands.end() && it.value().cmd29) ? memRx : 0;
+        };
         // Build memoryType from current VFO state
         memoryType mem;
         mem.channel = ch;
@@ -2491,11 +2508,11 @@ void webServer::handleCommand(QWebSocket *client, const QJsonObject &cmd)
         // direction and the tone mode into a single byte, so writing one
         // without the other silently clears the repeater shift.
         mem.tonemode = static_cast<quint8>(currentToneMode());
-        cacheItem toneCache = queue->getCache(funcToneFreq, 0);
+        cacheItem toneCache = queue->getCache(funcToneFreq, memCacheRx(funcToneFreq));
         if (toneCache.value.isValid()) mem.tone = toneCache.value.value<toneInfo>().name;
-        cacheItem tsqlCache = queue->getCache(funcTSQLFreq, 0);
+        cacheItem tsqlCache = queue->getCache(funcTSQLFreq, memCacheRx(funcTSQLFreq));
         if (tsqlCache.value.isValid()) mem.tsql = tsqlCache.value.value<toneInfo>().name;
-        cacheItem dtcsCache = queue->getCache(funcDTCSCode, 0);
+        cacheItem dtcsCache = queue->getCache(funcDTCSCode, memCacheRx(funcDTCSCode));
         if (dtcsCache.value.isValid()) {
             // Only a code the rig actually lists: the struct's own default is a
             // CTCSS value, and a memory carrying it is rejected outright.
@@ -2510,11 +2527,11 @@ void webServer::handleCommand(QWebSocket *client, const QJsonObject &cmd)
         }
         // The stored duplex is the low nibble of duplexMode_t (0 simplex,
         // 1 DUP-, 2 DUP+), not the 0x1x register value.
-        cacheItem dupCache = queue->getCache(funcDuplexMode, 0);
+        cacheItem dupCache = queue->getCache(funcDuplexMode, memCacheRx(funcDuplexMode));
         if (dupCache.value.isValid())
             mem.duplex = static_cast<quint8>(dupCache.value.value<duplexMode_t>()) & 0x0f;
         if (rigCaps->commands.contains(funcReadFreqOffset)) {
-            cacheItem offCache = queue->getCache(funcReadFreqOffset, 0);
+            cacheItem offCache = queue->getCache(funcReadFreqOffset, memCacheRx(funcReadFreqOffset));
             if (offCache.value.isValid()) mem.duplexOffset = offCache.value.value<freqt>();
         }
         // A channel that says "shift down" with no shift transmits on its own
@@ -2537,10 +2554,10 @@ void webServer::handleCommand(QWebSocket *client, const QJsonObject &cmd)
         // through the same sources buildStatusJson uses. In memory mode the
         // selected-freq cache carries the recalled channel's frequency, so a
         // write from MEM captures what you're actually listening to.
-        vfoCommandType tA = queue->getVfoCommand(vfoA, 0, false);
-        cacheItem freqCache = queue->getCache(tA.freqFunc, 0);
+        vfoCommandType tA = queue->getVfoCommand(vfoA, memRx, false);
+        cacheItem freqCache = queue->getCache(tA.freqFunc, tA.receiver);
         if (!freqCache.value.isValid()) freqCache = queue->getCache(funcSelectedFreq, 0);
-        if (!freqCache.value.isValid()) freqCache = queue->getCache(funcFreq, 0);
+        if (!freqCache.value.isValid()) freqCache = queue->getCache(funcFreq, memCacheRx(funcFreq));
         if (freqCache.value.isValid()) {
             mem.frequency = freqCache.value.value<freqt>();
         }
@@ -2555,9 +2572,9 @@ void webServer::handleCommand(QWebSocket *client, const QJsonObject &cmd)
             }
             return;
         }
-        cacheItem modeCache = queue->getCache(tA.modeFunc, 0);
+        cacheItem modeCache = queue->getCache(tA.modeFunc, tA.receiver);
         if (!modeCache.value.isValid()) modeCache = queue->getCache(funcSelectedMode, 0);
-        if (!modeCache.value.isValid()) modeCache = queue->getCache(funcMode, 0);
+        if (!modeCache.value.isValid()) modeCache = queue->getCache(funcMode, memCacheRx(funcMode));
         if (modeCache.value.isValid()) {
             modeInfo m = modeCache.value.value<modeInfo>();
             mem.mode = m.reg;
