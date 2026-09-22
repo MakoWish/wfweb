@@ -38,7 +38,7 @@ int main()
             "<call:5>IK1ZZ <qso_date:8:D>20200505 <time_on:6>101010 <freq:8>7.074000 "
             "<name:5>Jos\xc3\xa9 <gridsquare:4>JN45 junk between fields <eor>\r\n"
             "<CALL:0> <QSO_DATE:8>20200506 <EOR>\n"                       // no call: dropped
-            "<call:6>K1TEST <app_wfweb_id:3>abc <app_wfweb_df:4>1500 <eor>");  // no trailing newline
+            "<call:6>K1TEST <app_wfweb_id:3>abc <app_wfweb_df:4>1500 <station_callsign:5>w2erc <eor>");  // no trailing newline
         const QList<QsoRecord> recs = Logbook::parseAdif(adif);
         require(recs.size() == 2, "parser: two valid records expected");
         require(recs[0].call == "IK1ZZ" && recs[0].date == "20200505" && recs[0].time == "101010", "parser: core fields");
@@ -47,6 +47,7 @@ int main()
         require(recs[0].theirGrid == "JN45", "parser: GRIDSQUARE -> theirGrid");
         require(!recs[0].id.isEmpty(), "parser: missing APP_WFWEB_ID gets a fresh id");
         require(recs[1].id == "abc" && recs[1].df == 1500, "parser: APP_WFWEB_ID / APP_WFWEB_DF round-trip");
+        require(recs[1].stationCall == "W2ERC" && recs[0].stationCall.isEmpty(), "parser: STATION_CALLSIGN read and upper-cased, absent stays empty");
     }
 
     // --- record round trip through toAdif/parseAdif ---
@@ -54,11 +55,13 @@ int main()
         QsoRecord r = qso("K1TEST", "20260917", "120000");
         r.name = QString::fromUtf8("Zo\xc3\xab");
         r.comment = "portable";
+        r.stationCall = "K1FM";   // records are normalised at the JSON/ADIF boundary, not on assignment
         r.df = 1234;
         const QList<QsoRecord> back = Logbook::parseAdif(Logbook::adifHeader() + r.toAdif());
         require(back.size() == 1, "round trip: one record");
         require(back[0].id == r.id && back[0].name == r.name && back[0].comment == r.comment
                 && back[0].freq == r.freq && back[0].df == 1234, "round trip: fields identical");
+        require(back[0].stationCall == "K1FM" && r.toAdif(false).contains("<STATION_CALLSIGN:4>K1FM"), "round trip: STATION_CALLSIGN is a standard field, kept in clean exports");
     }
 
     QTemporaryDir tmp;

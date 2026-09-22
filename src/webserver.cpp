@@ -907,6 +907,20 @@ void webServer::handleRestRequest(QTcpSocket *socket, const QString &method,
         return doc.object();
     };
 
+    // --- Station identity: one callsign + grid for the whole server ---
+    if (p == "/api/v1/station") {
+        if (method == "GET") {
+            sendRestResponse(socket, 200, QJsonObject{{"callsign", reporterCallsign}, {"grid", reporterGrid}});
+        } else if (method == "PUT" || method == "POST") {
+            const QJsonObject in = parseBody();
+            applyStationCallsign(in.value("callsign").toString(), in.value("grid").toString(), true);
+            sendRestResponse(socket, 200, QJsonObject{{"callsign", reporterCallsign}, {"grid", reporterGrid}});
+        } else {
+            sendRestResponse(socket, 405, QJsonObject{{"error", "Method not allowed"}});
+        }
+        return;
+    }
+
     // --- Station logbook (see logbook.h) ---
     // The log is never returned whole: GET pages newest-first with a cursor
     // so a lifetime log stays cheap for the browser and the Pi alike.
@@ -1912,8 +1926,11 @@ void webServer::handleCommand(QWebSocket *client, const QJsonObject &cmd)
         // storage; otherwise it keeps it and re-sends on every connect.
         QList<QsoRecord> incoming;
         const QJsonArray entries = cmd["entries"].toArray();
-        for (const QJsonValue &v : entries)
-            incoming.append(QsoRecord::fromJson(v.toObject()));
+        for (const QJsonValue &v : entries) {
+            QsoRecord r = QsoRecord::fromJson(v.toObject());
+            if (r.stationCall.isEmpty()) r.stationCall = reporterCallsign;   // logged at this station
+            incoming.append(r);
+        }
         const int added = logbook_.merge(incoming);
         if (added) {
             qInfo() << "Logbook: merged" << added << "of" << incoming.size() << "browser-local QSOs";
@@ -3134,8 +3151,9 @@ void webServer::handleCommand(QWebSocket *client, const QJsonObject &cmd)
         }
     }
     else if (type == "setReporter") {
-        reporterCallsign = cmd["callsign"].toString().toUpper().trimmed();
-        reporterGrid = cmd["grid"].toString().toUpper().trimmed();
+        // Only the on/off flags: the station callsign and grid are server
+        // state (see applyStationCallsign), not something each browser
+        // re-asserts.
         // "enabled" is the legacy field (FreeDV reporter); "freedvEnabled"
         // is the explicit name now that PSK Reporter is also configured here.
         reporterEnabled = cmd.contains("freedvEnabled")
@@ -3212,31 +3230,11 @@ void webServer::handleCommand(QWebSocket *client, const QJsonObject &cmd)
         notifyPskReporterStatus();
     }
     else if (type == "setStationCallsign") {
-        // Lightweight callsign push: caches the call (and grid) for the
-        // FreeDV reporter and pushes it to the RADE EOO encoder. Unlike
-        // setReporter, it does NOT toggle the FreeDV/PSK reporter on/off,
-        // so the browser can call it on tab load (when the DIGI checkbox
-        // state hasn't been restored yet) without disconnecting an active
-        // reporter.
-        //
-        // An empty callsign clears the cached value — important so a fresh
-        // browser session with no saved call doesn't inherit stale state
-        // from whoever last connected to this daemon (e.g. a developer's
-        // debug tab).  In multi-tab setups the most-recent client wins.
-        QString call = cmd["callsign"].toString().toUpper().trimmed();
-        QString grid = cmd["grid"].toString().toUpper().trimmed();
-        reporterCallsign = call;
-        if (!grid.isEmpty()) reporterGrid = grid;
-        qInfo() << "Web: setStationCallsign"
-                << (reporterCallsign.isEmpty() ? QStringLiteral("<cleared>") : reporterCallsign)
-                << reporterGrid;
-        if (radeProcessor) {
-            QMetaObject::invokeMethod(radeProcessor, "setTxCallsign",
-                                      Qt::QueuedConnection,
-                                      Q_ARG(QString, reporterCallsign));
-        }
-        if (freedvReporter) freedvReporter->setStation(reporterCallsign, reporterGrid);
-        if (pskReporter)    pskReporter->setStation(reporterCallsign, reporterGrid);
+        // A browser changed the station callsign (or grid) in one of its
+        // panels.  Persist it and push it to every other browser; an empty
+        // grid leaves the stored one alone (a panel without the grid input
+        // in view sends none).
+        applyStationCallsign(cmd["callsign"].toString(), cmd["grid"].toString(), true);
     }
     else if (type == "setDigiActive") {
         // Browser opens / closes the FT8/FT4 panel.  PSK Reporter only
@@ -3290,6 +3288,8 @@ QJsonObject webServer::buildInfoJson() const
     // platform) can find the file without guessing the data directory.
     info["logbookPath"] = logbook_.path();
     info["logbookPersistent"] = logbookPersistent_;
+    info["stationCallsign"] = reporterCallsign;
+    info["stationGrid"] = reporterGrid;
     info["version"] = QString(WFWEB_VERSION);
     // Instance tag from --name; empty means "show the rig model".
     info["name"] = instanceName_;
@@ -3434,6 +3434,9 @@ void webServer::sendCurrentState(QWebSocket *client)
     info["logbookPath"] = logbook_.path();
     info["logbookCount"] = logbook_.count();
     info["logbookPersistent"] = logbookPersistent_;
+    // The browser adopts these on connect instead of pushing its own copy.
+    info["stationCallsign"] = reporterCallsign;
+    info["stationGrid"] = reporterGrid;
     sendJsonTo(client, info);
     // The log itself is paged over REST; this only tells the browser to fetch page 1.
     sendJsonTo(client, logbookSummary());
@@ -5879,13 +5882,46 @@ void webServer::setSettingsFile(const QString &path)
     packetSettingsFile_ = path;
 }
 
+std::unique_ptr<QSettings> webServer::openSettings() const
+{
+    return std::unique_ptr<QSettings>(packetSettingsFile_.isEmpty()
+        ? new QSettings()
+        : new QSettings(packetSettingsFile_, QSettings::IniFormat));
+}
+
+void webServer::applyStationCallsign(const QString &callIn, const QString &gridIn, bool persist)
+{
+    const QString call = callIn.toUpper().trimmed();
+    const QString grid = gridIn.toUpper().trimmed();
+    const bool changed = call != reporterCallsign || (!grid.isEmpty() && grid != reporterGrid);
+    reporterCallsign = call;
+    if (!grid.isEmpty()) reporterGrid = grid;
+    if (persist) {
+        auto settings = openSettings();
+        settings->setValue("Station/Callsign", reporterCallsign);
+        settings->setValue("Station/Grid", reporterGrid);
+    }
+    qInfo().noquote() << "Station:" << (reporterCallsign.isEmpty() ? QStringLiteral("<no callsign>") : reporterCallsign)
+                      << reporterGrid << (persist ? "(saved)" : "(from settings)");
+    if (radeProcessor)
+        QMetaObject::invokeMethod(radeProcessor, "setTxCallsign", Qt::QueuedConnection,
+                                  Q_ARG(QString, reporterCallsign));
+    if (freedvReporter) freedvReporter->setStation(reporterCallsign, reporterGrid);
+    if (pskReporter)    pskReporter->setStation(reporterCallsign, reporterGrid);
+    if (changed)
+        sendJsonToAll(QJsonObject{{"type", "stationChanged"}, {"callsign", reporterCallsign}, {"grid", reporterGrid}});
+}
+
 void webServer::configureLogbook(const QString &logbookOverride,
                                  const QString &remoteLogOverride,
                                  bool noRemoteLog, bool remoteLogDecodes)
 {
-    std::unique_ptr<QSettings> settings(packetSettingsFile_.isEmpty()
-        ? new QSettings()
-        : new QSettings(packetSettingsFile_, QSettings::IniFormat));
+    auto settings = openSettings();
+
+    // Station identity first: the logbook and the remote logger both stamp
+    // QSOs with it.
+    applyStationCallsign(settings->value("Station/Callsign").toString(),
+                         settings->value("Station/Grid").toString(), false);
 
     // --logbook wins over Logbook= in the settings file.  A relative path in
     // a named profile resolves next to that profile, so contest.conf can
@@ -5953,6 +5989,7 @@ QJsonObject webServer::logbookSummary() const
 
 bool webServer::logbookAdd(QsoRecord &r)
 {
+    if (r.isValid() && r.stationCall.isEmpty()) r.stationCall = reporterCallsign;
     if (!r.isValid() || !logbook_.add(r)) return false;
     sendJsonToAll(QJsonObject{{"type", "qsoAdded"}, {"qso", r.toJson()}, {"count", logbook_.count()},
                               {"unexported", logbook_.unexportedCount()}});
@@ -6084,7 +6121,7 @@ void webServer::wsjtxSendQso(const QsoRecord &q)
     f.reportReceived = q.rstRcvd;
     f.comments = q.comment;
     f.name = q.name;
-    f.myCall = reporterCallsign;
+    f.myCall = q.stationCall.isEmpty() ? reporterCallsign : q.stationCall;
     f.myGrid = q.grid.isEmpty() ? reporterGrid : q.grid;
     // Both messages, exactly as WSJT-X does: loggers pick whichever they parse.
     wsjtxSendDatagram(WsjtxMessage::qsoLogged(wsjtxId_, f));

@@ -23,6 +23,7 @@ struct QsoRecord {
     QString rstRcvd;
     QString comment;
     QString name;
+    QString stationCall;  // STATION_CALLSIGN: the call this station used for the QSO
     int     df = -1;    // digi audio offset in Hz, <0 = not set
     // UTC stamp (yyyyMMddTHHmmssZ) of the export that included this record,
     // persisted as APP_WFWEB_EXPORTED.  Empty = not exported yet ("new").

@@ -35,6 +35,7 @@ QsoRecord QsoRecord::normalized() const
     r.rstRcvd   = rstRcvd.trimmed().left(16);
     r.comment   = comment.trimmed().left(256);
     r.name      = name.trimmed().left(128);
+    r.stationCall = stationCall.trimmed().left(32).toUpper();
     r.freq      = freq > 0 ? freq : 0;
     r.df        = df;
     r.exported  = exported.trimmed().left(20);
@@ -56,6 +57,7 @@ QsoRecord QsoRecord::fromJson(const QJsonObject &in, const QString &id)
     r.rstRcvd   = in.value("rstRcvd").toString();
     r.comment   = in.value("comment").toString();
     r.name      = in.value("name").toString();
+    r.stationCall = in.value("stationCall").toString();
     r.freq      = in.value("freq").toVariant().toLongLong();
     r.exported  = in.value("exported").toString();   // round-trips through edits
     if (in.value("df").isDouble())
@@ -82,6 +84,7 @@ QJsonObject QsoRecord::toJson() const
     put("rstRcvd", rstRcvd);
     put("comment", comment);
     put("name", name);
+    put("stationCall", stationCall);
     put("exported", exported);
     if (df >= 0) o["df"] = df;
     return o;
@@ -114,6 +117,7 @@ QByteArray QsoRecord::toAdif(bool appFields) const
     field("RST_RCVD", rstRcvd);
     field("GRIDSQUARE", theirGrid);
     field("MY_GRIDSQUARE", grid);
+    field("STATION_CALLSIGN", stationCall);
     field("COMMENT", comment);
     field("NAME", name);
     if (appFields) {
@@ -165,6 +169,7 @@ QList<QsoRecord> Logbook::parseAdif(const QByteArray &data)
             r.grid      = QString::fromUtf8(fields.value("MY_GRIDSQUARE"));
             r.comment   = QString::fromUtf8(fields.value("COMMENT"));
             r.name      = QString::fromUtf8(fields.value("NAME"));
+            r.stationCall = QString::fromUtf8(fields.value("STATION_CALLSIGN"));
             r.freq      = qRound64(fields.value("FREQ").toDouble() * 1e6);
             r.exported  = QString::fromUtf8(fields.value("APP_WFWEB_EXPORTED"));
             if (fields.contains("APP_WFWEB_DF"))

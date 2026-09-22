@@ -19,6 +19,8 @@
 #include <QSslCertificate>
 #include <QUdpSocket>
 #include <QUrlQuery>
+#include <QSettings>
+#include <memory>
 #include "logbook.h"
 
 #if (QT_VERSION < QT_VERSION_CHECK(6,0,0))
@@ -213,6 +215,12 @@ private:
     // both, which is the structural unification of TX audio plumbing.
     void txWritePcmFrame(const QByteArray &pcmMonoLE, bool applyGain);
     void handleCommand(QWebSocket *client, const QJsonObject &cmd);
+    // One station callsign + grid for the whole server, persisted under
+    // [Station] in the settings file and pushed to every browser.  Replaces
+    // the old per-browser value that the last client to connect used to
+    // overwrite (a stale tab could silently swap the call on every QSO).
+    void applyStationCallsign(const QString &call, const QString &grid, bool persist);
+    std::unique_ptr<QSettings> openSettings() const;
     // Station logbook (see logbook.h).  These wrap the Logbook mutations
     // with the WebSocket delta events and the WSJT-X emission.
     bool logbookAdd(QsoRecord &r);

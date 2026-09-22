@@ -61,6 +61,25 @@ All responses are JSON objects.
 
 ## Endpoints
 
+### Station identity
+
+One station callsign and grid for the whole server, persisted under
+`[Station]` (`Callsign`, `Grid`) in the settings file. Every browser adopts
+it on connect and any panel that changes it changes it for all of them; a
+browser never overwrites it with a saved copy of its own (the old behaviour,
+where the last browser to connect won, could silently swap the call on a
+QSO). Logged QSOs are stamped with it (`stationCall`, ADIF
+`STATION_CALLSIGN`), and it is the `myCall` of the remote-logging messages.
+
+| Method | Endpoint | Action |
+|---|---|---|
+| `GET` | `/api/v1/station` | `{"callsign","grid"}` |
+| `PUT` | `/api/v1/station` | Set either or both; an empty `grid` keeps the stored one |
+
+Over the WebSocket the browser sends `setStationCallsign {callsign,grid}` and
+every client receives `{"type":"stationChanged","callsign","grid"}`;
+`rigInfo` carries `stationCallsign` and `stationGrid`.
+
 ### Server logbook
 
 The server is the source of truth for the station logbook. It is a plain ADIF
@@ -97,7 +116,9 @@ size of the whole log.
 
 A QSO object carries `date` (YYYYMMDD), `time` (HHMMSS), `call`, `freq` (Hz),
 `band`, `mode`, `grid` (own), `theirGrid`, `rstSent`, `rstRcvd`, and
-optionally `comment`, `name`, `df`, `exported`. Only `call` is required.
+optionally `comment`, `name`, `df`, `exported`, `stationCall`. Only `call` is
+required; `stationCall` defaults to the station callsign when a QSO is
+logged (imported files keep whatever they carry).
 
 **Export bookkeeping.** Each record carries an export stamp
 (`APP_WFWEB_EXPORTED`, UTC `yyyyMMddTHHmmssZ`) once it has been included in

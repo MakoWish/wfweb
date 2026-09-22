@@ -133,6 +133,39 @@ def test_logbook_orders_pages_and_filters(rest_url):
     _clear(base)
 
 
+def test_station_callsign_is_server_state_and_stamps_qsos(rest_url):
+    base = _base(rest_url)
+    station = rest_url.removesuffix("/radio") + "/station"
+    _clear(base)
+
+    # One station callsign + grid for the whole server, normalised and persisted.
+    r = requests.put(station, json={"callsign": " w2erc ", "grid": "fn20"}, timeout=5)
+    assert r.status_code == 200 and r.json() == {"callsign": "W2ERC", "grid": "FN20"}
+    assert requests.get(station, timeout=5).json() == {"callsign": "W2ERC", "grid": "FN20"}
+    info = requests.get(rest_url + "/info", timeout=5).json()
+    info = info.get("info", info)
+    assert info["stationCallsign"] == "W2ERC" and info["stationGrid"] == "FN20"
+    # An empty grid in an update leaves the stored one alone.
+    assert requests.put(station, json={"callsign": "W2ERC", "grid": ""}, timeout=5).json()["grid"] == "FN20"
+
+    # A logged QSO is stamped with it; the ADIF carries STATION_CALLSIGN.
+    e = requests.post(base, json=_qso("K1TEST", "20260921", "100000"), timeout=5).json()
+    assert e["stationCall"] == "W2ERC"
+    adif = requests.get(f"{base}/adif", timeout=5).text
+    assert "<STATION_CALLSIGN:5>W2ERC" in adif
+    new = requests.get(f"{base}/adif", params={"new": 1}, timeout=5).text
+    assert "<STATION_CALLSIGN:5>W2ERC" in new       # standard field, so it survives the clean export
+
+    # An explicit value is kept; an imported file without one is not invented.
+    e2 = requests.post(base, json=_qso("K2TEST", "20260921", "110000", stationCall="kf0zjt"), timeout=5).json()
+    assert e2["stationCall"] == "KF0ZJT"
+    doc = b"<eoh>\n<call:5>IK3ZZ <qso_date:8>20200101 <time_on:6>120000 <mode:3>FT8 <eor>\n"
+    requests.post(f"{base}/adif", data=doc, timeout=5)
+    ik3 = requests.get(base, params={"call": "IK3ZZ"}, timeout=5).json()["entries"][0]
+    assert "stationCall" not in ik3
+    _clear(base)
+
+
 def test_logbook_import_merges_and_dedupes(rest_url):
     base = _base(rest_url)
     _clear(base)

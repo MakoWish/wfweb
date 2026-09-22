@@ -2762,6 +2762,7 @@ window.App.callsign = (function() {
         } catch(e) {}
         return '';
     }
+    var adopting = false;
     function set(s) {
         var v = normalize(s);
         try { localStorage.setItem(KEY, v); } catch(e) {}
@@ -2769,7 +2770,17 @@ window.App.callsign = (function() {
         try { localStorage.setItem('cwCallsign', v); } catch(e) {}
         try { window.dispatchEvent(new CustomEvent('appCallsignChanged', { detail: v })); } catch(e) {}
     }
-    return { get: get, set: set };
+    // The server holds the station callsign (one for every browser).  adopt()
+    // takes its value: it updates the local copy and the panels like set()
+    // does, but the change listener must not push it back to the server.
+    function adopt(s) {
+        var v = normalize(s);
+        if (v === get()) return;
+        adopting = true;
+        try { set(v); } finally { adopting = false; }
+    }
+    function isAdopting() { return adopting; }
+    return { get: get, set: set, adopt: adopt, isAdopting: isAdopting };
 })();
 
 var currentFreq = 0;
@@ -3101,11 +3112,9 @@ function onTransportOpen() {
     document.getElementById('connDot').title = 'Connected';
     if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
     send({ cmd: 'getStatus' });
-    // Push the saved station callsign on every connect — the server caches
-    // it for the RADE EOO encoder and the FreeDV reporter. This is needed
-    // because App.callsign reads from localStorage on page load without
-    // calling .set(), so the appCallsignChanged listener never fires.
-    pushStationCallsign();
+    // The station callsign is server state: rigInfo brings it and we adopt
+    // it (see the rigInfo handler).  Pushing our saved copy here is exactly
+    // what let a stale tab overwrite the call for everyone.
     var rCb = document.getElementById('digiReporterEnable');
     if (rCb && rCb.checked) sendReporterConfig();
 }
@@ -3174,6 +3183,16 @@ function handleMessage(msg) {
             if (msg.logbookPersistent !== undefined) {
                 logbookPersistent = !!msg.logbookPersistent;
                 updateDigiLogWarning();
+            }
+            if (msg.stationCallsign !== undefined) {
+                if (msg.stationCallsign) {
+                    window.App.callsign.adopt(msg.stationCallsign);
+                } else if (window.App.callsign.get()) {
+                    // First run after the upgrade: the server has no station
+                    // callsign yet, hand it the one saved in this browser.
+                    pushStationCallsign();
+                }
+                if (msg.stationGrid) adoptStationGrid(msg.stationGrid);
             }
             if (msg.remoteLogTarget !== undefined) {
                 remoteLogStatus = { enabled: !!msg.remoteLogEnabled, target: msg.remoteLogTarget || '', decodes: !!msg.remoteLogDecodes };
@@ -3413,6 +3432,11 @@ function handleMessage(msg) {
             if (msg.persistent !== undefined) { logbookPersistent = !!msg.persistent; updateDigiLogWarning(); }
             loadLogbookPage(true);
             migrateBrowserLog();
+            break;
+        case 'stationChanged':
+            // Another browser (or a script) changed the station callsign/grid.
+            window.App.callsign.adopt(msg.callsign || '');
+            if (msg.grid) adoptStationGrid(msg.grid);
             break;
         case 'logbookMerged':
             loadWorkedIndex();
@@ -8181,13 +8205,25 @@ function sendReporterConfig() {
     var fdvCb = document.getElementById('digiReporterEnable');
     var pskCb = document.getElementById('digiPskReporterEnable');
     if (!ws || ws.readyState !== 1) return;
+    // Flags only: the station callsign and grid live on the server and are
+    // changed through pushStationCallsign().
     send({
         cmd: 'setReporter',
         freedvEnabled: !!(fdvCb && fdvCb.checked),
-        pskEnabled: !!(pskCb && pskCb.checked),
-        callsign: getMyCall(),
-        grid: getMyGrid()
+        pskEnabled: !!(pskCb && pskCb.checked)
     });
+}
+
+// The server's station grid arrived (connect, or changed elsewhere): show it
+// in the DIGI panel's field, which is where every other reader looks.
+function adoptStationGrid(g) {
+    var v = String(g || '').toUpperCase();
+    var gridEl = document.getElementById('digiGrid');
+    if (gridEl && gridEl.value !== v) {
+        gridEl.value = v;
+        if (typeof updateDigiMsgRows === 'function') updateDigiMsgRows();
+    }
+    try { localStorage.setItem('digiGrid', v); } catch(e) {}
 }
 
 // Lightweight callsign push. Unlike sendReporterConfig this doesn't
@@ -8212,7 +8248,7 @@ function pushStationCallsign() {
 // empty — and therefore the RADE EOO encoding silent — until the user
 // opened DIGI for the first time.
 window.addEventListener('appCallsignChanged', function() {
-    pushStationCallsign();
+    if (!window.App.callsign.isAdopting()) pushStationCallsign();
     // Re-render the FreeDV indicator so the "(set callsign)" chip
     // disappears as soon as a call is set.
     if (freedvEnabled) updateFreeDVStatus({});
@@ -11055,6 +11091,7 @@ function initDigiHandlers() {
             this.value = this.value.toUpperCase();
             try { localStorage.setItem('digiGrid', this.value); } catch(e) {}
             updateDigiMsgRows();
+            if (this.value.length >= 4) pushStationCallsign();   // server-side station grid
             sendReporterConfig();
         });
     }
