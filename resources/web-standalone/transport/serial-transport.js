@@ -70,14 +70,17 @@
 
     // Icom scope center-span table. Identical across IC-7300 / IC-705 /
     // IC-9700 (the modern HF/VHF rigs).
+    // hz is the half-span the rig takes (0x27 0x15); freq repeats it under the
+    // name the C++ server's rigInfo uses, so the SPA sizes Fixed windows from
+    // either build alike.
     var DEFAULT_SPANS = [
-        { num: 0, name: '±2.5k', hz: 2500   },
-        { num: 1, name: '±5k',   hz: 5000   },
-        { num: 2, name: '±10k',  hz: 10000  },
-        { num: 3, name: '±25k',  hz: 25000  },
-        { num: 4, name: '±50k',  hz: 50000  },
-        { num: 5, name: '±100k', hz: 100000 },
-        { num: 6, name: '±250k', hz: 250000 },
+        { num: 0, name: '±2.5k', hz: 2500,   freq: 2500   },
+        { num: 1, name: '±5k',   hz: 5000,   freq: 5000   },
+        { num: 2, name: '±10k',  hz: 10000,  freq: 10000  },
+        { num: 3, name: '±25k',  hz: 25000,  freq: 25000  },
+        { num: 4, name: '±50k',  hz: 50000,  freq: 50000  },
+        { num: 5, name: '±100k', hz: 100000, freq: 100000 },
+        { num: 6, name: '±250k', hz: 250000, freq: 250000 },
     ];
 
     // 0x15 sub-command -> the SPA status field and the IcomRigCaps meter
@@ -194,7 +197,7 @@
         setToneMode: true, setToneFreq: true, setTsqlFreq: true,
         setDtcsCode: true,
         // Misc
-        setTuner: true, setPower: true, setSpan: true, setScopeRef: true, setScopeSpeed: true, setScopeMode: true,
+        setTuner: true, setPower: true, setSpan: true, setScopeRef: true, setScopeSpeed: true, setScopeMode: true, setScopeEdges: true,
         // CW
         sendCW: true, stopCW: true,
         // Filter width / shape
@@ -754,6 +757,22 @@
                     if (typeof obj.value === 'number' && this._hasSpectrum)
                         this._enqueue('scopeMode', civ.cmdSetScopeMode(obj.value));
                     return;
+                case 'setScopeEdges': {
+                    // Fixed-mode window in Hz (issue #113): written into edge
+                    // set 3 of the frequency range that holds it, then that
+                    // set is selected. Same policy as the C++ server.
+                    var lo = obj.lower, hi = obj.upper;
+                    if (!this._hasSpectrum || typeof lo !== 'number' || typeof hi !== 'number' || !(hi > lo)) return;
+                    var ranges = (RIG_CAPS[this.civAddr] && RIG_CAPS[this.civAddr].scopeEdgeRanges) || [];
+                    for (var ri = 0; ri < ranges.length; ri++) {
+                        if (lo >= ranges[ri].minFreq && hi <= ranges[ri].maxFreq) {
+                            this._enqueue('scopeEdges', civ.cmdSetScopeFixedEdges(ranges[ri].num, 3, lo, hi));
+                            this._enqueue('scopeEdge', civ.cmdSetScopeEdge(3));
+                            return;
+                        }
+                    }
+                    return;
+                }
                 case 'sendCW':
                     if (!this._rigCanTransmit()) return;
                     if (typeof obj.text !== 'string' || !obj.text.length) return;
@@ -2369,6 +2388,7 @@
                 filters: DEFAULT_FILTERS,
                 spans: DEFAULT_SPANS,
                 scopeModes: (entry && entry.scopeModes) || [],
+                scopeFixedEdges: !!(entry && entry.scopeEdgeRanges && entry.scopeEdgeRanges.length),
                 preamps: preamps,
                 attenuators: attenuators,
                 // Band table for the BAND picker — an unknown rig gets none

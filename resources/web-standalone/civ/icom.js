@@ -691,6 +691,21 @@
         return new Uint8Array([0x27, 0x14, 0x00, Math.max(0, Math.min(3, mode | 0))]);
     }
 
+    // ---------- Fixed-mode edges (cmd 0x27 0x1E / 0x16) ---------------------
+    // 27 1E [scope] [range BCD] [edge BCD] [lower 5-byte BCD] [upper 5-byte BCD]
+    // writes one edge set of one frequency range; 27 16 [scope] [edge] picks
+    // which set Fixed mode uses.
+    function cmdSetScopeFixedEdges(range, edge, lowerHz, upperHz) {
+        var out = new Uint8Array(15);
+        out.set([0x27, 0x1E, 0x00, encodeBcd2(range | 0), encodeBcd2(edge | 0)], 0);
+        out.set(encodeBcdLE(lowerHz, 5), 5);
+        out.set(encodeBcdLE(upperHz, 5), 10);
+        return out;
+    }
+    function cmdSetScopeEdge(edge) {
+        return new Uint8Array([0x27, 0x16, 0x00, encodeBcd2(Math.max(1, Math.min(4, edge | 0)))]);
+    }
+
     // ---------- MOD INPUT — modulation source selector -----------------
     // Two registers: "Data OFF Mod Input" (used in voice modes) and
     // "DATA1 Mod Input" (used in DATA-on modes — USB-D, LSB-D, …). The
@@ -1429,6 +1444,8 @@
         cmdSetScopeRef: cmdSetScopeRef,
         cmdSetScopeSpeed: cmdSetScopeSpeed,
         cmdSetScopeMode: cmdSetScopeMode,
+        cmdSetScopeFixedEdges: cmdSetScopeFixedEdges,
+        cmdSetScopeEdge: cmdSetScopeEdge,
         cmdSetDataOffMod: cmdSetDataOffMod,
         cmdReadDataOffMod: cmdReadDataOffMod,
         cmdSetDataMod: cmdSetDataMod,
