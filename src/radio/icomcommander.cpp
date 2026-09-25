@@ -3703,12 +3703,13 @@ void icomCommander::receiveCommand(funcs func, QVariant value, uchar receiver)
             }
             else if (!strcmp(value.typeName(),"scopeEdgeSetting"))
             {
-                // 27 1E [scope] [range BCD] [edge BCD] [lower 5-byte BCD] [upper 5-byte BCD]
+                // 27 1E [range BCD] [edge BCD] [lower 5-byte BCD] [upper 5-byte BCD]
+                // The edge table is a global setting like 27 1C: no per-scope
+                // byte, the rig refuses the prefixed form (IC-7300, #113).
                 scopeEdgeSetting e = value.value<scopeEdgeSetting>();
                 freqt lo, hi;
                 lo.Hz = e.lower;
                 hi.Hz = e.upper;
-                payload.append(static_cast<char>(receiver));
                 payload.append(bcdEncodeChar(e.range));
                 payload.append(bcdEncodeChar(e.edge));
                 payload.append(makeFreqPayload(lo, 5));

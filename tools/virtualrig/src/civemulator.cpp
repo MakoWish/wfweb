@@ -564,10 +564,15 @@ void civEmulator::handleScopeCommand(const QByteArray& body)
         }
         break;
     }
-    case 0x1E: { // fixed edges: VFO + range BCD + edge BCD + lower(5) + upper(5)
-        if (rest.size() >= 13) {
-            quint64 lo = bcd5ToFreq(rest.mid(3, 5));
-            quint64 hi = bcd5ToFreq(rest.mid(8, 5));
+    case 0x1E: { // fixed edges: range BCD + edge BCD + lower(5) + upper(5). A global
+                 // setting like 0x1C: NO scope byte, and like the rig we refuse
+                 // the prefixed form (a 0x00 range) instead of skipping it.
+        const quint8 range = rest.size() >= 1 ? (quint8)rest[0] : 0;
+        if (range == 0 || range > 0x13) {
+            emit replyFrame(ack(false));
+        } else if (rest.size() >= 12) {
+            quint64 lo = bcd5ToFreq(rest.mid(2, 5));
+            quint64 hi = bcd5ToFreq(rest.mid(7, 5));
             if (hi > lo) {
                 scopeFixedLo = lo;
                 scopeFixedHi = hi;
@@ -576,12 +581,12 @@ void civEmulator::handleScopeCommand(const QByteArray& body)
             } else {
                 emit replyFrame(ack(false));
             }
-        } else if (rest.size() >= 3) {
+        } else if (rest.size() >= 2) {
             QByteArray v;
-            v.append(rest[1]); v.append(rest[2]);
+            v.append(rest[0]); v.append(rest[1]);
             v.append(freqToBcd5(scopeFixedLo));
             v.append(freqToBcd5(scopeFixedHi));
-            echoVfo((quint8)rest[0], v);
+            echoSimple(v);
         } else {
             emit replyFrame(ack(false));
         }

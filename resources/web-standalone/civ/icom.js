@@ -692,14 +692,15 @@
     }
 
     // ---------- Fixed-mode edges (cmd 0x27 0x1E / 0x16) ---------------------
-    // 27 1E [scope] [range BCD] [edge BCD] [lower 5-byte BCD] [upper 5-byte BCD]
-    // writes one edge set of one frequency range; 27 16 [scope] [edge] picks
-    // which set Fixed mode uses.
+    // 27 1E [range BCD] [edge BCD] [lower 5-byte BCD] [upper 5-byte BCD] writes
+    // one edge set of one frequency range; 27 16 [scope] [edge] picks which
+    // set Fixed mode uses. The edge table is a global setting like 27 1C: no
+    // per-scope byte, the rig refuses the prefixed form (IC-7300, #113).
     function cmdSetScopeFixedEdges(range, edge, lowerHz, upperHz) {
-        var out = new Uint8Array(15);
-        out.set([0x27, 0x1E, 0x00, encodeBcd2(range | 0), encodeBcd2(edge | 0)], 0);
-        out.set(encodeBcdLE(lowerHz, 5), 5);
-        out.set(encodeBcdLE(upperHz, 5), 10);
+        var out = new Uint8Array(14);
+        out.set([0x27, 0x1E, encodeBcd2(range | 0), encodeBcd2(edge | 0)], 0);
+        out.set(encodeBcdLE(lowerHz, 5), 4);
+        out.set(encodeBcdLE(upperHz, 5), 9);
         return out;
     }
     function cmdSetScopeEdge(edge) {
