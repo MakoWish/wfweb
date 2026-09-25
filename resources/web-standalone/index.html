@@ -3151,6 +3151,7 @@ var SCOPE_MODE_LABELS = { 0: 'CENTER', 1: 'FIXED', 2: 'SCROLL', 3: 'SCROLL-F' };
 var availableScopeModes = [];    // [{num,name}] the rig offers, from rigInfo; the keys in the SPAN sheet
 var spectOor = false;            // this sweep is flagged out of range (FIXED: VFO outside the window, data blank)
 var scopeDragFreq = 0;           // frequency under the finger while dragging on fixed glass (modes != CENTER)
+var scopeDragPaged = false;      // this drag pushed the VFO past an edge (SCROLL): no more tunes until the finger comes back in
 var scopeFixedEdges = false;     // rigInfo: the rig file has the 0x27 0x1E range table, so FIXED windows can be set from here
 var fixedEdgeChoice = 'band';    // a browser-set FIXED window covers: 'band' = the ham band, or a span index = that width around the VFO
 var fixedWindowOwned = false;    // this page wrote the current FIXED window, so it may follow band changes
@@ -7836,13 +7837,26 @@ function scopeDragTuneFreq(clientX, deltaX, release) {
     if (scopeMode === 0) return scopeFreqFromDragDeltaX(deltaX);
     if (scopeDragRectWidth <= 0 || !(spectEndFreq > spectStartFreq)) return 0;
     var frac = (clientX - scopeDragRectLeft) / scopeDragRectWidth;
-    if ((scopeMode === 2 || scopeMode === 3) && !release) {
+    if (scopeMode === 2 || scopeMode === 3) {
         // The rig only scrolls once the VFO is past an edge, and a finger can't
         // leave the glass: pulling the marker into the last 1.5% pushes it 2%
-        // over, the rig pages the window, and the same spot is now mid-glass.
-        // Not on release, or a drag parked at the edge would page twice.
-        if (frac >= 0.985) frac = Math.max(frac, 1.02);
-        else if (frac <= 0.015) frac = Math.min(frac, -0.02);
+        // over and the rig pages the window. That is one page per touch of
+        // the edge: until the finger comes back inside, nothing more is sent,
+        // not on later moves (a parked finger would page again and again) and
+        // not on release (the new edges arrive with the next sweep, so the
+        // release position would still map into the OLD window and tune the
+        // VFO straight back, scrolling the rig back where it came from).
+        if (scopeDragPaged) {
+            if (frac > 0.05 && frac < 0.95) scopeDragPaged = false;
+            else return 0;
+        }
+        if (release) {
+            frac = Math.max(0, Math.min(1, frac));
+        } else if (frac >= 0.985) {
+            frac = Math.max(frac, 1.02); scopeDragPaged = true;
+        } else if (frac <= 0.015) {
+            frac = Math.min(frac, -0.02); scopeDragPaged = true;
+        }
     } else {
         frac = Math.max(0, Math.min(1, frac));
     }
@@ -7875,6 +7889,7 @@ function scopePointerDown(e) {
     scopeDragStartX = e.clientX;
     scopeDragStartFreq = currentFreq;
     scopeDragFreq = 0;
+    scopeDragPaged = false;
     scopeDragLastTuneTime = 0;
     scopeDragMoveHistory = [];
 
@@ -7952,6 +7967,7 @@ function scopePointerEnd(e, commitTune) {
     scopeDragCanvas = null;
     scopeDragStartFreq = 0;
     scopeDragFreq = 0;
+    scopeDragPaged = false;
     scopeDragMoveHistory = [];
     scopeDragRectLeft = 0;
     scopeDragRectWidth = 0;
