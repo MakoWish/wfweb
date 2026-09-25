@@ -194,7 +194,7 @@
         setToneMode: true, setToneFreq: true, setTsqlFreq: true,
         setDtcsCode: true,
         // Misc
-        setTuner: true, setPower: true, setSpan: true, setScopeRef: true, setScopeSpeed: true,
+        setTuner: true, setPower: true, setSpan: true, setScopeRef: true, setScopeSpeed: true, setScopeMode: true,
         // CW
         sendCW: true, stopCW: true,
         // Filter width / shape
@@ -747,6 +747,12 @@
                 case 'setScopeSpeed':
                     if (typeof obj.value === 'number' && this._hasSpectrum)
                         this._enqueue('setScopeSpeed', civ.cmdSetScopeSpeed(obj.value));
+                    return;
+                case 'setScopeMode':
+                    // Center / Fixed / Scroll (issue #113). Same queue key as
+                    // the connect-time setup so a tap replaces a pending frame.
+                    if (typeof obj.value === 'number' && this._hasSpectrum)
+                        this._enqueue('scopeMode', civ.cmdSetScopeMode(obj.value));
                     return;
                 case 'sendCW':
                     if (!this._rigCanTransmit()) return;
@@ -2278,18 +2284,27 @@
             }
         }
 
+        // Same header the C++ server builds (webserver.cpp, funcScopeWaveData):
+        //   [0x01][scopeMode][outOfRange][pad][startMHz f32][endMHz f32][pixels]
+        // scopeMode: 0 Center, 1 Fixed, 2 Scroll-C, 3 Scroll-F (rig 0x27 0x14).
+        // Out of range (Fixed mode, VFO outside the window) carries no pixels
+        // from the rig; emit a zero-filled sweep of the usual length so the
+        // SPA paints blank rows instead of freezing on the last sweep.
         _emitSpectrum(empty) {
             var pixels = empty ? [] : this._scope.pixels;
+            var n = empty ? (this._lastPixelCount || 475) : pixels.length;
+            if (!empty) this._lastPixelCount = n;
             var startMhz = this._scope.startFreq / 1e6;
             var endMhz   = this._scope.endFreq / 1e6;
-            var buf = new ArrayBuffer(12 + pixels.length);
+            var buf = new ArrayBuffer(12 + n);
             var view = new DataView(buf);
             view.setUint8(0, 0x01);
-            view.setUint8(1, 0x00);
-            view.setUint16(2, 0, true);
+            view.setUint8(1, this._scope.mode & 0xFF);
+            view.setUint8(2, empty ? 1 : 0);
+            view.setUint8(3, 0);
             view.setFloat32(4, startMhz, true);
             view.setFloat32(8, endMhz,   true);
-            if (pixels.length) {
+            if (!empty) {
                 var bytes = new Uint8Array(buf, 12);
                 for (var i = 0; i < pixels.length; i++) bytes[i] = pixels[i];
             }
@@ -2313,12 +2328,10 @@
             this._enqueue('scopeOn',   new Uint8Array([0x27, 0x10, 0x01]));
             this._enqueue('scopeData', new Uint8Array([0x27, 0x11, 0x01]));
             if (!this._hasSpectrum) return;
-            // Force Center scope mode: the SPA keeps the RX indicator fixed
-            // mid-screen and scrolls the waterfall under it, which only
-            // renders correctly when the rig reports center-mode spectrum.
-            // A rig left in Fixed mode sends static band edges, so the
-            // marker/passband/span all appear frozen (issue #75). 0 = Center.
-            this._enqueue('scopeMode',   new Uint8Array([0x27, 0x14, 0x00, 0x00]));
+            // The scope mode (Center / Fixed / Scroll) is the SPA's to set: it
+            // draws whichever the rig reports (the mode rides in every sweep)
+            // and re-commands its last pick on connect via setScopeMode
+            // (issue #113). Forcing Center here used to be the fix for #75.
             // Force Carrier Point Center: with Filter Center (0) the spectrum
             // centres on the passband instead of the VFO, so a signal aligned
             // to the visual passband is mistuned in RX audio (issue #75).
@@ -2355,6 +2368,7 @@
                 modes: DEFAULT_MODES,
                 filters: DEFAULT_FILTERS,
                 spans: DEFAULT_SPANS,
+                scopeModes: (entry && entry.scopeModes) || [],
                 preamps: preamps,
                 attenuators: attenuators,
                 // Band table for the BAND picker — an unknown rig gets none
