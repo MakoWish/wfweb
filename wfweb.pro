@@ -367,7 +367,8 @@ SOURCES += \
     src/rigctld.cpp \
     src/ft4222handler.cpp \
     src/rtpaudio.cpp \
-    src/webserver.cpp
+    src/webserver.cpp \
+    src/memorystore.cpp
 
 macx:SOURCES += src/tlsproxy.cpp
 
@@ -423,6 +424,7 @@ HEADERS  += \
     include/yaesuudpcat.h \
     include/yaesuudpcontrol.h \
     include/yaesuudpscope.h \
-    include/webserver.h
+    include/webserver.h \
+    include/memorystore.h
 
 macx:HEADERS += include/tlsproxy.h
