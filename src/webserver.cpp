@@ -554,6 +554,10 @@ void webServer::receiveRigCaps(rigCapabilities *caps)
             }
             obj["scopeModes"] = scopeModes;
         }
+        // The browser may set the Fixed-mode window (setScopeEdges) only when the
+        // rig file carries the 0x27 0x1E range table and both edge commands.
+        obj["scopeFixedEdges"] = !rigCaps->scopeEdgeRanges.empty() &&
+            rigCaps->commands.contains(funcScopeFixedEdgeFreq) && rigCaps->commands.contains(funcScopeEdge);
         if (!rigCaps->preamps.empty()) {
             QJsonArray preamps;
             for (const genericType &p : rigCaps->preamps) {
@@ -2123,6 +2127,30 @@ void webServer::handleCommand(QWebSocket *client, const QJsonObject &cmd)
         if (rigCaps && rigCaps->commands.contains(funcScopeMode))
             queue->addUnique(priorityImmediate, queueItem(funcScopeMode, QVariant::fromValue<uchar>(mode), false, 0));
     }
+    else if (type == "setScopeEdges") {
+        // Fixed-mode window, lower/upper in Hz (issue #113). Written into edge
+        // set 3 of the frequency range that holds it (0x27 0x1E), leaving sets
+        // 1 and 2 as the operator set them on the rig, then that set is
+        // selected (0x27 0x16). Rigs without a range table in their rig file
+        // don't get here: rigInfo reports scopeFixedEdges=false.
+        quint64 lower = static_cast<quint64>(cmd["lower"].toDouble());
+        quint64 upper = static_cast<quint64>(cmd["upper"].toDouble());
+        if (rigCaps && upper > lower && rigCaps->commands.contains(funcScopeFixedEdgeFreq) && rigCaps->commands.contains(funcScopeEdge)) {
+            scopeEdgeSetting e;
+            for (const genericType &r : rigCaps->scopeEdgeRanges) {
+                if (lower >= r.minFreq && upper <= r.maxFreq) { e.range = r.num; break; }
+            }
+            if (e.range) {
+                e.edge = 3;
+                e.lower = lower;
+                e.upper = upper;
+                queue->addUnique(priorityImmediate, queueItem(funcScopeFixedEdgeFreq, QVariant::fromValue<scopeEdgeSetting>(e), false, 0));
+                queue->addUnique(priorityImmediate, queueItem(funcScopeEdge, QVariant::fromValue<uchar>(e.edge), false, 0));
+            } else {
+                qCInfo(logWebServer) << "setScopeEdges: no fixed-edge range holds" << lower << "-" << upper << "Hz";
+            }
+        }
+    }
     else if (type == "enableAudio") {
         bool enable = cmd["value"].toBool();
         if (enable) {
@@ -3208,6 +3236,10 @@ QJsonObject webServer::buildInfoJson() const
             }
             info["scopeModes"] = scopeModes;
         }
+        // The browser may set the Fixed-mode window (setScopeEdges) only when the
+        // rig file carries the 0x27 0x1E range table and both edge commands.
+        info["scopeFixedEdges"] = !rigCaps->scopeEdgeRanges.empty() &&
+            rigCaps->commands.contains(funcScopeFixedEdgeFreq) && rigCaps->commands.contains(funcScopeEdge);
         if (!rigCaps->preamps.empty()) {
             QJsonArray preamps;
             for (const genericType &p : rigCaps->preamps) {

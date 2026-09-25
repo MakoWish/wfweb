@@ -33,6 +33,7 @@ servermain::servermain(const QString settingsFile, const cmdLineOverrides& overr
     qRegisterMetaType<modeInfo>();
     qRegisterMetaType<vfo_t>();
     qRegisterMetaType<scopeData>();
+    qRegisterMetaType<scopeEdgeSetting>();
     qRegisterMetaType<centerSpanData>();
     qRegisterMetaType<meter_t>();
     qRegisterMetaType<spectrumBounds>();
