@@ -99,6 +99,10 @@ private:
     quint64 scopeWinLo = 0;
     quint64 scopeWinHi = 0;
     bool scopeWinValid = false;
+    // Edge set written with 0x27 0x1E (range/edge numbers are accepted but
+    // not modelled per range): FIXED uses it instead of a VFO-centred window.
+    quint64 scopeFixedLo = 0;
+    quint64 scopeFixedHi = 0;
     bool scopeHold = false;          // 0x17
     qint16 scopeRefTenths = 0;       // 0x19 (-300..+300, in 0.1 dB units)
     quint8 scopeSpeed = 1;           // 0x1a (0=fast, 1=mid, 2=slow)

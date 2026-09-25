@@ -564,6 +564,29 @@ void civEmulator::handleScopeCommand(const QByteArray& body)
         }
         break;
     }
+    case 0x1E: { // fixed edges: VFO + range BCD + edge BCD + lower(5) + upper(5)
+        if (rest.size() >= 13) {
+            quint64 lo = bcd5ToFreq(rest.mid(3, 5));
+            quint64 hi = bcd5ToFreq(rest.mid(8, 5));
+            if (hi > lo) {
+                scopeFixedLo = lo;
+                scopeFixedHi = hi;
+                scopeWinValid = false;
+                emit replyFrame(ack(true));
+            } else {
+                emit replyFrame(ack(false));
+            }
+        } else if (rest.size() >= 3) {
+            QByteArray v;
+            v.append(rest[1]); v.append(rest[2]);
+            v.append(freqToBcd5(scopeFixedLo));
+            v.append(freqToBcd5(scopeFixedHi));
+            echoVfo((quint8)rest[0], v);
+        } else {
+            emit replyFrame(ack(false));
+        }
+        break;
+    }
     case 0x16: { // edge (VFO + 1 BCD byte)
         if (rest.size() == 1) {
             quint8 vfo = (quint8)rest[0];
@@ -707,8 +730,13 @@ void civEmulator::emitScopeWaveData()
         upper = freq + halfSpan;
     } else {
         if (!scopeWinValid) {
-            scopeWinLo = (freq > halfSpan) ? (freq - halfSpan) : 0ULL;
-            scopeWinHi = freq + halfSpan;
+            if (scopeMode == 1 && scopeFixedHi > scopeFixedLo) {
+                scopeWinLo = scopeFixedLo;
+                scopeWinHi = scopeFixedHi;
+            } else {
+                scopeWinLo = (freq > halfSpan) ? (freq - halfSpan) : 0ULL;
+                scopeWinHi = freq + halfSpan;
+            }
             scopeWinValid = true;
         }
         if (freq < scopeWinLo || freq > scopeWinHi) {
