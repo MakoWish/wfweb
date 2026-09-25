@@ -3598,6 +3598,9 @@ function handleMessage(msg) {
         case 'memoryScanComplete':
             handleMemoryScanComplete(msg);
             break;
+        case 'memoryError':
+            handleMemoryError(msg);
+            break;
         case 'freedvStatus':
             updateFreeDVStatus(msg);
             break;
@@ -5960,6 +5963,7 @@ var memoryChannels = {};
 var memGroupList = [];       // valid memory-group numbers for this rig ([] = rig has no groups)
 var memCurrentGroup = 0;     // group the browser is currently reading/writing
 var memCapsSeen = null;      // "memGroups/memStart" caps last applied
+var memErrorTimer = null;    // clears a failed-action message from the title
 
 // Build the group list + selector from rig caps. memGroups is the highest
 // group number, memStart the lowest; a rig with no groups reports
@@ -6021,7 +6025,7 @@ function refreshMemories() {
     memoryChannels = {};
     document.getElementById('memoryList').innerHTML =
         '<div class="memory-empty">Scanning...</div>';
-    document.getElementById('memScanStatus').textContent = 'scanning...';
+    setMemStatus('scanning...');
     // Start at 0: zero-based rigs (IC-705/905) have a real channel 0. Rigs
     // whose channels start at 1 just drop the out-of-range first read and
     // the scan moves on.
@@ -6127,13 +6131,12 @@ function handleMemoryChannel(msg) {
 
 function handleMemoryScanComplete(msg) {
     if (msg.error) {
-        document.getElementById('memScanStatus').textContent = '';
+        setMemStatus('');
         document.getElementById('memoryList').innerHTML =
             '<div class="memory-empty">' + msg.error + '</div>';
         return;
     }
-    document.getElementById('memScanStatus').textContent =
-        msg.count ? msg.count + ' found' : '';
+    setMemStatus(msg.count ? msg.count + ' found' : '');
     if (document.getElementById('memoryOverlay').classList.contains('visible')) renderMemoryList();
 }
 
@@ -6174,6 +6177,25 @@ function memorySaveConfirm() {
     send({ cmd: 'writeMemory', channel: ch, group: memCurrentGroup, name: name.trim() });
     memorySaveCancel();
     setTimeout(refreshMemories, 500);
+}
+
+// Single writer for the memory panel's status line, so a red failure message
+// can't outlive the next scan.
+function setMemStatus(text, isError) {
+    var el = document.getElementById('memScanStatus');
+    if (!el) return;
+    clearTimeout(memErrorTimer);
+    el.textContent = text;
+    el.style.color = isError ? 'var(--state-error)' : '';
+    if (isError) memErrorTimer = setTimeout(function () { setMemStatus(''); }, 5000);
+}
+
+// A memory action the rig can't perform — no contents command, or a rig file
+// with no MemFormat (issue #114). The panel is already open, so report it
+// where the scan status goes instead of only in the console.
+function handleMemoryError(msg) {
+    memorySaveCancel();
+    setMemStatus(msg.error || 'Memory command failed', true);
 }
 
 function memorySaveCancel() {

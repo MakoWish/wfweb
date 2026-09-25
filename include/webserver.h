@@ -576,6 +576,8 @@ private:
     QString modeRegToString(quint8 reg);
     void scanNextMemory();
     bool recallMemoryOnRig(int channel, int group, QString *error = nullptr);
+    bool memoryContentsSupported() const;
+    void sendMemoryError(QWebSocket *client, const QString &error);
 
     // Repeater access tone (TONE / TSQL / DTCS). Rigs speak one of two
     // dialects — the single "Tone Squelch Type" register (IC-705/9700/905) or

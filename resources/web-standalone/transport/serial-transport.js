@@ -1950,7 +1950,13 @@
 
         _memWrite(obj) {
             var fmt = this._memFormat();
-            if (!fmt) return;
+            // No MemFormat means the rig can't be asked for, or told, a
+            // channel's contents (issue #114) — say so instead of going quiet.
+            if (!fmt) {
+                this._emit('memoryError',
+                    { error: 'This radio cannot store memory channels over CI-V' });
+                return;
+            }
             if (!obj || obj.channel === undefined) return;
             var ch = obj.channel | 0;
             if (!this._memChannelOk(ch)) return;
@@ -2003,7 +2009,11 @@
 
         _memClear(obj) {
             var fmt = this._memFormat();
-            if (!fmt) return;
+            if (!fmt) {
+                this._emit('memoryError',
+                    { error: 'This radio cannot clear memory channels over CI-V' });
+                return;
+            }
             if (!obj || obj.channel === undefined) return;
             var ch = obj.channel | 0;
             if (!this._memChannelOk(ch)) return;
@@ -2108,7 +2118,12 @@
         // does the same from its memoryType cache).
         _memRename(obj) {
             var fmt = this._memFormat();
-            if (!fmt || !obj || obj.channel === undefined) return;
+            if (!fmt) {
+                this._emit('memoryError',
+                    { error: 'This radio cannot store memory names over CI-V' });
+                return;
+            }
+            if (!obj || obj.channel === undefined) return;
             var ch = obj.channel | 0;
             var group = (obj.group | 0) || 0;
             var mem = this._memCache[group * 65536 + ch];

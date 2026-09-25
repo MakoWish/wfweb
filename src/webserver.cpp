@@ -2240,7 +2240,7 @@ void webServer::handleCommand(QWebSocket *client, const QJsonObject &cmd)
             sendJsonTo(client, err);
             return;
         }
-        if (!rigCaps->commands.contains(funcMemoryContents) || rigCaps->memParser.isEmpty()) {
+        if (!memoryContentsSupported()) {
             QJsonObject err;
             err["type"] = "memoryScanComplete";
             err["count"] = 0;
@@ -2285,6 +2285,10 @@ void webServer::handleCommand(QWebSocket *client, const QJsonObject &cmd)
     }
     else if (type == "writeMemory") {
         if (!queue || !rigCaps) return;
+        if (!memoryContentsSupported()) {
+            sendMemoryError(client, "This radio cannot store memory channels over CI-V");
+            return;
+        }
         int ch = cmd["channel"].toInt();
         int group = cmd.contains("group") ? cmd["group"].toInt() : 0;
         // Channel 0 is real on zero-based rigs (IC-705/905)
@@ -2417,6 +2421,10 @@ void webServer::handleCommand(QWebSocket *client, const QJsonObject &cmd)
         // contents come from the server's cached copy of the channel, so
         // tone / duplex / split written from the rig's front panel survive.
         if (!queue || !rigCaps) return;
+        if (!memoryContentsSupported()) {
+            sendMemoryError(client, "This radio cannot store memory names over CI-V");
+            return;
+        }
         int ch = cmd["channel"].toInt();
         int group = cmd.contains("group") ? cmd["group"].toInt() : 0;
         if (ch <= 0 && !(ch == 0 && rigCaps->memStart == 0)) return;
@@ -2442,6 +2450,10 @@ void webServer::handleCommand(QWebSocket *client, const QJsonObject &cmd)
     }
     else if (type == "clearMemory") {
         if (!queue || !rigCaps) return;
+        if (!memoryContentsSupported()) {
+            sendMemoryError(client, "This radio cannot clear memory channels over CI-V");
+            return;
+        }
         int ch = cmd["channel"].toInt();
         int group = cmd.contains("group") ? cmd["group"].toInt() : 0;
         if (ch <= 0) return;
@@ -4129,6 +4141,39 @@ void webServer::scanNextMemory()
     uint val = (uint(memoryScanGroup) << 16) | uint(memoryScanCurrent);
     queue->addUnique(priorityImmediate, queueItem(funcMemoryContents, QVariant::fromValue<uint>(val), false, 0));
     if (memoryScanTimer) memoryScanTimer->start();
+}
+
+// Can this rig report a memory channel's *contents*? Two halves, and both
+// matter (issue #114):
+//
+//   - funcMemoryContents (CI-V 1A 00 on Icom) is the command that reads a
+//     channel back. The IC-718 and the IC-706 family predate it entirely —
+//     they can select, write and clear a channel, but never say what is in
+//     one, so there is nothing to build a list from.
+//   - memParser is the byte layout that command's payload uses, taken from
+//     the rig file's MemFormat. The IC-746 / IC-756PRO family declare the
+//     command but ship an empty MemFormat, and serializing a memoryType
+//     against an empty parser appends no bytes at all — putting a payload-less
+//     "1A 00" on the wire, which the radio answers with NG.
+//
+// Every entry point that reads or writes channel contents gates on this.
+// Channel *select* (funcMemoryMode / funcMemorySelect) is a separate
+// capability and is checked where it is used, in recallMemoryOnRig().
+bool webServer::memoryContentsSupported() const
+{
+    return rigCaps && rigCaps->commands.contains(funcMemoryContents)
+        && !rigCaps->memParser.isEmpty();
+}
+
+// Report a failed memory action back to the client that asked for it. Before
+// this, the unsupported-rig paths in handleCommand() simply returned, leaving
+// the browser's Save / rename / clear looking like they had worked.
+void webServer::sendMemoryError(QWebSocket *client, const QString &error)
+{
+    QJsonObject obj;
+    obj["type"] = "memoryError";
+    obj["error"] = error;
+    sendJsonTo(client, obj);
 }
 
 // Recall a stored channel *on the radio* (issue #92) so the rig itself
