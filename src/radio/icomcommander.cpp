@@ -2218,16 +2218,6 @@ bool icomCommander::parseSpectrum(scopeData& d, uchar receiver)
             oldScopeMode = d.mode;
         }
 
-        d.oor=(bool)payloadIn[3+(freqLen*2)];
-        if (d.oor) {
-            d.data = QByteArray(rigCaps.spectLenMax,'\0');
-            d.valid=true;
-            return true;
-        }
-
-        // clear wave information
-        d.data.clear();
-
         // For Fixed, and both scroll modes, the following produces correct information:
         fStart = parseFreqData(payloadIn.mid(3,freqLen),receiver);
         d.startFreq = fStart.MHzDouble;
@@ -2240,6 +2230,19 @@ bool icomCommander::parseSpectrum(scopeData& d, uchar receiver)
             d.startFreq -= d.endFreq;
             d.endFreq = d.startFreq + 2*(d.endFreq);
         }
+
+        // Out of range (Fixed mode, VFO outside the window): the header still
+        // carries the window edges but no pixels follow. Keep the edges so the
+        // browser can draw the (empty) window, and hand it a blank sweep.
+        d.oor=(bool)payloadIn[3+(freqLen*2)];
+        if (d.oor) {
+            d.data = QByteArray(rigCaps.spectLenMax,'\0');
+            d.valid=true;
+            return true;
+        }
+
+        // clear wave information
+        d.data.clear();
 
         if (sequence == sequenceMax) // Must be a LAN packet.
         {

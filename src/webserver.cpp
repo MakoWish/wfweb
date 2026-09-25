@@ -541,6 +541,19 @@ void webServer::receiveRigCaps(rigCapabilities *caps)
             }
             obj["spans"] = spans;
         }
+        if (!rigCaps->scopeModes.empty()) {
+            // The rig's scope modes (Center / Fixed / Scroll-C / Scroll-F) as the
+            // rig file lists them; the browser picks which keys to show.
+            QJsonArray scopeModes;
+            for (const genericType &m : rigCaps->scopeModes) {
+                if (m.num > 3) continue;
+                QJsonObject sm;
+                sm["num"] = (int)m.num;
+                sm["name"] = m.name;
+                scopeModes.append(sm);
+            }
+            obj["scopeModes"] = scopeModes;
+        }
         if (!rigCaps->preamps.empty()) {
             QJsonArray preamps;
             for (const genericType &p : rigCaps->preamps) {
@@ -2101,6 +2114,15 @@ void webServer::handleCommand(QWebSocket *client, const QJsonObject &cmd)
         if (rigCaps && rigCaps->commands.contains(funcScopeSpeed))
             queue->addUnique(priorityImmediate, queueItem(funcScopeSpeed, QVariant::fromValue<uchar>(speed), false, 0));
     }
+    else if (type == "setScopeMode") {
+        // Scope mode (0x27 0x14): 0 = Center, 1 = Fixed, 2 = Scroll-C,
+        // 3 = Scroll-F. The browser draws whichever the rig reports (the mode
+        // rides in every spectrum frame) and re-commands its last pick on
+        // connect, so nothing forces Center any more (issue #113).
+        uchar mode = static_cast<uchar>(qBound(0, cmd["value"].toInt(), 3));
+        if (rigCaps && rigCaps->commands.contains(funcScopeMode))
+            queue->addUnique(priorityImmediate, queueItem(funcScopeMode, QVariant::fromValue<uchar>(mode), false, 0));
+    }
     else if (type == "enableAudio") {
         bool enable = cmd["value"].toBool();
         if (enable) {
@@ -3173,6 +3195,19 @@ QJsonObject webServer::buildInfoJson() const
             }
             info["spans"] = spans;
         }
+        if (!rigCaps->scopeModes.empty()) {
+            // The rig's scope modes (Center / Fixed / Scroll-C / Scroll-F) as the
+            // rig file lists them; the browser picks which keys to show.
+            QJsonArray scopeModes;
+            for (const genericType &m : rigCaps->scopeModes) {
+                if (m.num > 3) continue;
+                QJsonObject sm;
+                sm["num"] = (int)m.num;
+                sm["name"] = m.name;
+                scopeModes.append(sm);
+            }
+            info["scopeModes"] = scopeModes;
+        }
         if (!rigCaps->preamps.empty()) {
             QJsonArray preamps;
             for (const genericType &p : rigCaps->preamps) {
@@ -3518,6 +3553,9 @@ QJsonObject webServer::buildStatusJson()
             }
         }
     }
+    cacheItem scopeModeCache = queue->getCache(funcScopeMode, 0);
+    if (scopeModeCache.value.isValid())
+        status["scopeMode"] = (int)scopeModeCache.value.value<uchar>();
 
     return status;
 }
@@ -3714,12 +3752,14 @@ void webServer::receiveCache(cacheItem item)
         scopeData sd = item.value.value<scopeData>();
         if (!sd.valid || sd.data.isEmpty()) return;
 
-        // Binary format: [msgType(1)] [reserved(1)] [padding(2)] [startFreq float32(4)] [endFreq float32(4)] [data(N)]
+        // Binary format: [msgType(1)] [scopeMode(1)] [outOfRange(1)] [padding(1)] [startFreq float32(4)] [endFreq float32(4)] [data(N)]
+        // scopeMode: 0 Center, 1 Fixed, 2 Scroll-C, 3 Scroll-F (rig 0x27 0x14).
+        // outOfRange: 1 when the VFO is outside a Fixed window; data is then all zero.
         QByteArray msg;
         msg.resize(12 + sd.data.size());
         msg[0] = 0x01;  // msgType: spectrum data
-        msg[1] = 0;     // reserved
-        msg[2] = 0;     // padding
+        msg[1] = static_cast<char>(sd.mode);
+        msg[2] = sd.oor ? 1 : 0;
         msg[3] = 0;     // padding
 
         float startF = static_cast<float>(sd.startFreq);
@@ -3819,6 +3859,11 @@ void webServer::receiveCache(cacheItem item)
         }
         break;
     }
+    case funcScopeMode:
+        // Polled and read back after every set, so a change made on the rig's
+        // own MENU reaches the browser between spectrum frames.
+        update["scopeMode"] = (int)item.value.value<uchar>();
+        break;
     case funcPowerControl:
         rigPoweredOn = item.value.toBool();
         update["powerState"] = rigPoweredOn;
