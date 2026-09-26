@@ -11606,6 +11606,10 @@ function initDigiHandlers() {
     if (haltBtn) {
         haltBtn.addEventListener('click', function() {
             console.log('[DIGI] Halt TX clicked');
+            // Abort the in-flight audio pacer first (same as the dblclick target
+            // switch) — clearing the flags alone leaves the worklet streaming, so a
+            // TX started before the slot ends would overlap the halted one (#118).
+            haltDigiTx();
             if (digiMonitorSrc) { try { digiMonitorSrc.stop(); } catch(e) {} digiMonitorSrc = null; }
             digiTxArmed = false;
             digiTxActive = false;
@@ -11622,6 +11626,7 @@ function initDigiHandlers() {
             if (etb) etb.classList.remove('active');
             stopDigiTune();
             send({ cmd: 'setPTT', value: false });
+            if (!micEnabled) send({ cmd: 'enableMic', value: false });
             updateDigiStatus('HALT', '');
             updateDigiMsgRows();
             drawDigiWaterfall();

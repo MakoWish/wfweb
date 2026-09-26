@@ -10554,36 +10554,8 @@ function executeDigiTx(slotPhase) {
         updateDigiStatus('TX', 'tx');
         send({ cmd: 'enableMic', value: true });
 
-        // Local TX monitor: play the generated audio through browser speakers
-        // at reduced volume. The source is tracked on the shared digiMonitorSrc
-        // so external halt paths can still stop it.
-        var monSrc = null;
-        try {
-            if (digiTxCtx && digiTxCtx.state === 'running') {
-                var monBuf = digiTxCtx.createBuffer(1, samples12k.length, 12000);
-                monBuf.copyToChannel(samples12k, 0);
-                monSrc = digiTxCtx.createBufferSource();
-                monSrc.buffer = monBuf;
-                var monGain = digiTxCtx.createGain();
-                monGain.gain.value = 0.025;
-                monSrc.connect(monGain);
-                monGain.connect(digiTxCtx.destination);
-                digiMonitorSrc = monSrc;
-                monSrc.onended = function() {
-                    if (digiMonitorSrc === monSrc) digiMonitorSrc = null;
-                };
-                monSrc.start();
-            }
-        } catch(e) {
-            console.warn('[DIGI TX] local monitor error:', e);
-            monSrc = null;
-        }
-        function stopSidetone() {
-            if (!monSrc) return;
-            try { monSrc.stop(); } catch (e) {}
-            if (digiMonitorSrc === monSrc) digiMonitorSrc = null;
-            monSrc = null;
-        }
+        // Sidetone (local TX monitor) lives inside streamDigiAudio now, so
+        // FT8/FT4 and JS8 share the same playback path. Nothing to do here.
 
         // Capture df/txMsg for the closures below
         var txDf = df;
@@ -10840,6 +10812,39 @@ function streamDigiAudio(samples12k, onDone, onFirstChunk) {
     }
     var actualRate = txCtx.sampleRate;
     console.log('[DIGI stream] AudioContext actualRate=' + actualRate + ' state=' + txCtx.state);
+
+    // Local TX sidetone: play the generated audio through browser speakers
+    // at the same low level the FT8 path used to set up directly. Done here
+    // so every caller — FT8/FT4, JS8, future modes — gets the monitor for
+    // free without remembering to wire it up. The source is tracked on the
+    // shared digiMonitorSrc so external halt paths can still stop it.
+    var monSrc = null;
+    try {
+        if (txCtx.state === 'running') {
+            var monBuf = txCtx.createBuffer(1, samples12k.length, 12000);
+            monBuf.copyToChannel(samples12k, 0);
+            monSrc = txCtx.createBufferSource();
+            monSrc.buffer = monBuf;
+            var monGain = txCtx.createGain();
+            monGain.gain.value = 0.025;
+            monSrc.connect(monGain);
+            monGain.connect(txCtx.destination);
+            digiMonitorSrc = monSrc;
+            monSrc.onended = function () {
+                if (digiMonitorSrc === monSrc) digiMonitorSrc = null;
+            };
+            monSrc.start();
+        }
+    } catch (e) {
+        console.warn('[DIGI stream] sidetone error:', e);
+        monSrc = null;
+    }
+    function stopSidetone() {
+        if (!monSrc) return;
+        try { monSrc.stop(); } catch (e) {}
+        if (digiMonitorSrc === monSrc) digiMonitorSrc = null;
+        monSrc = null;
+    }
 
     // Upsample 12 kHz Float32 → actualRate Float32
     var ratio = actualRate / 12000;
@@ -11646,6 +11651,10 @@ function initDigiHandlers() {
     if (haltBtn) {
         haltBtn.addEventListener('click', function() {
             console.log('[DIGI] Halt TX clicked');
+            // Abort the in-flight audio pacer first (same as the dblclick target
+            // switch) — clearing the flags alone leaves the worklet streaming, so a
+            // TX started before the slot ends would overlap the halted one (#118).
+            haltDigiTx();
             if (digiMonitorSrc) { try { digiMonitorSrc.stop(); } catch(e) {} digiMonitorSrc = null; }
             digiTxArmed = false;
             digiTxActive = false;
@@ -11662,6 +11671,7 @@ function initDigiHandlers() {
             if (etb) etb.classList.remove('active');
             stopDigiTune();
             send({ cmd: 'setPTT', value: false });
+            if (!micEnabled) send({ cmd: 'enableMic', value: false });
             updateDigiStatus('HALT', '');
             updateDigiMsgRows();
             drawDigiWaterfall();
