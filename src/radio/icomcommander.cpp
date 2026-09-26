@@ -1679,6 +1679,7 @@ void icomCommander::determineRigCaps()
     rigCaps.periodic.clear();
     rigCaps.roofing.clear();
     rigCaps.scopeModes.clear();
+    rigCaps.scopeEdgeRanges.clear();
 
     for (int i = meterNone; i < meterUnknown; i++)
     {
@@ -2045,6 +2046,18 @@ void icomCommander::determineRigCaps()
         settings->endArray();
     }
 
+    // Frequency ranges the fixed-edge command (0x27 0x1E) addresses by number;
+    // each range holds its own edge sets. Only rigs whose table is in the
+    // rig file get browser-set fixed edges.
+    int numEdgeRanges = settings->beginReadArray("ScopeEdgeRanges");
+    for (int c = 0; c < numEdgeRanges; c++)
+    {
+        settings->setArrayIndex(c);
+        rigCaps.scopeEdgeRanges.push_back(genericType(settings->value("Num", 0).toString().toUInt(), settings->value("Name", 0).toString(),
+                                                      settings->value("Start", 0).toULongLong(), settings->value("End", 0).toULongLong()));
+    }
+    settings->endArray();
+
     settings->endGroup();
 
     delete settings;
@@ -2226,16 +2239,6 @@ bool icomCommander::parseSpectrum(scopeData& d, uchar receiver)
             oldScopeMode = d.mode;
         }
 
-        d.oor=(bool)payloadIn[3+(freqLen*2)];
-        if (d.oor) {
-            d.data = QByteArray(rigCaps.spectLenMax,'\0');
-            d.valid=true;
-            return true;
-        }
-
-        // clear wave information
-        d.data.clear();
-
         // For Fixed, and both scroll modes, the following produces correct information:
         fStart = parseFreqData(payloadIn.mid(3,freqLen),receiver);
         d.startFreq = fStart.MHzDouble;
@@ -2248,6 +2251,19 @@ bool icomCommander::parseSpectrum(scopeData& d, uchar receiver)
             d.startFreq -= d.endFreq;
             d.endFreq = d.startFreq + 2*(d.endFreq);
         }
+
+        // Out of range (Fixed mode, VFO outside the window): the header still
+        // carries the window edges but no pixels follow. Keep the edges so the
+        // browser can draw the (empty) window, and hand it a blank sweep.
+        d.oor=(bool)payloadIn[3+(freqLen*2)];
+        if (d.oor) {
+            d.data = QByteArray(rigCaps.spectLenMax,'\0');
+            d.valid=true;
+            return true;
+        }
+
+        // clear wave information
+        d.data.clear();
 
         if (sequence == sequenceMax) // Must be a LAN packet.
         {
@@ -3692,6 +3708,20 @@ void icomCommander::receiveCommand(funcs func, QVariant value, uchar receiver)
                 centerSpanData span = value.value<centerSpanData>();
                 double freq = double(span.freq/1000000.0);
                 payload.append(makeFreqPayload(freq));
+            }
+            else if (!strcmp(value.typeName(),"scopeEdgeSetting"))
+            {
+                // 27 1E [range BCD] [edge BCD] [lower 5-byte BCD] [upper 5-byte BCD]
+                // The edge table is a global setting like 27 1C: no per-scope
+                // byte, the rig refuses the prefixed form (IC-7300, #113).
+                scopeEdgeSetting e = value.value<scopeEdgeSetting>();
+                freqt lo, hi;
+                lo.Hz = e.lower;
+                hi.Hz = e.upper;
+                payload.append(bcdEncodeChar(e.range));
+                payload.append(bcdEncodeChar(e.edge));
+                payload.append(makeFreqPayload(lo, 5));
+                payload.append(makeFreqPayload(hi, 5));
             }
             else if (!strcmp(value.typeName(),"toneInfo"))
             {
