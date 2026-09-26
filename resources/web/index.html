@@ -7233,11 +7233,16 @@ function handleBinaryMessage(buffer) {
     if (scopeDragPendingReset) { scopeDragPendingReset = false; scopeSetVisualPan(0); }
 
     scopeModeReported(view.getUint8(1));
-    spectOor = view.getUint8(2) === 1;
     prevSpectStartFreq = spectStartFreq;
     prevSpectEndFreq = spectEndFreq;
     spectStartFreq = view.getFloat32(4, true);
     spectEndFreq = view.getFloat32(8, true);
+    // Out of range: the VFO outside a fixed window. The header has a flag
+    // for it, but the IC-7300 never raises it, it just keeps sending full
+    // sweeps of zeros, so the VFO's position is the definition we use.
+    spectOor = view.getUint8(2) === 1 ||
+        (scopeMode !== 0 && currentFreq > 0 && spectEndFreq > spectStartFreq &&
+         (currentFreq < spectStartFreq * 1e6 - 1 || currentFreq > spectEndFreq * 1e6 + 1));
     spectData = new Uint8Array(buffer, 12);
     if (spectData.length !== spectDataLen) { spectDataLen = spectData.length; initWaterfallBuffer(spectDataLen); }
 
