@@ -3028,6 +3028,7 @@ var vfoAFreq = 0;
 var vfoBFreq = 0;
 var currentMode = '';
 var tuneStep = 1000;
+var FAST_TUNE_STEP = 10000;  // Shift/Ctrl + Up/Down (#120)
 var isTransmitting = false;
 var isSplit = false;
 var rigPoweredOn = true;
@@ -6949,17 +6950,20 @@ function toggleFullscreen() {
     }
 }
 
-function tuneUp() {
+// step defaults to tuneStep (1 kHz); Shift/Ctrl + arrow keys pass FAST_TUNE_STEP.
+function tuneUp(step) {
+    step = step || tuneStep;
     if (currentFreq > 0) {
-        var newFreq = currentFreq + tuneStep;
+        var newFreq = currentFreq + step;
         // Round down to nearest kHz (reset Hz to 000)
         newFreq = Math.floor(newFreq / 1000) * 1000;
         send({ cmd: 'setFrequency', value: newFreq });
     }
 }
-function tuneDown() {
-    if (currentFreq > tuneStep) {
-        var newFreq = currentFreq - tuneStep;
+function tuneDown(step) {
+    step = step || tuneStep;
+    if (currentFreq > step) {
+        var newFreq = currentFreq - step;
         // Round down to nearest kHz (reset Hz to 000)
         newFreq = Math.floor(newFreq / 1000) * 1000;
         send({ cmd: 'setFrequency', value: newFreq });
@@ -8174,8 +8178,15 @@ document.addEventListener('keydown', function(e) {
     if (macroEditor && macroEditor.style.display !== 'none') return;
 
     if (e.key === 'l' || e.key === 'L') { e.preventDefault(); openLogModal(); }
-    else if (e.key === 'ArrowUp' || e.key === '+') { e.preventDefault(); tuneUp(); }
-    else if (e.key === 'ArrowDown' || e.key === '-') { e.preventDefault(); tuneDown(); }
+    else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+        e.preventDefault();
+        // Shift (or Ctrl) + arrow tunes in 10 kHz jumps (#120). Only the arrows
+        // honour the modifier: '+' is itself typed with Shift on most layouts.
+        var step = (e.shiftKey || e.ctrlKey) ? FAST_TUNE_STEP : tuneStep;
+        if (e.key === 'ArrowUp') tuneUp(step); else tuneDown(step);
+    }
+    else if (e.key === '+') { e.preventDefault(); tuneUp(); }
+    else if (e.key === '-') { e.preventDefault(); tuneDown(); }
     else if (e.key === 'ArrowRight') { e.preventDefault(); tuneUpHz(); }
     else if (e.key === 'ArrowLeft') { e.preventDefault(); tuneDownHz(); }
     else if (e.key === 'Escape') {
