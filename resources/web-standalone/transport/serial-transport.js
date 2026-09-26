@@ -225,6 +225,14 @@
     function lsSetInt(key, val) {
         try { localStorage.setItem(key, String(val)); } catch (e) { /* ignore */ }
     }
+    function lsGetJson(key) {
+        try { var v = localStorage.getItem(key); return v ? JSON.parse(v) : null; }
+        catch (e) { return null; }
+    }
+    function lsSetJson(key, val) {
+        try { localStorage.setItem(key, JSON.stringify(val)); return true; }
+        catch (e) { return false; }
+    }
 
     // Decode a BCD-encoded byte (0x12 -> 12) — used for scope sequence numbers.
     function bcdByteToInt(b) {
@@ -1923,13 +1931,109 @@
             return civ.getRigMemFormat(this.civAddr);
         }
 
-        _memScanStart(obj) {
-            var fmt = this._memFormat();
-            if (!fmt) {
-                this._emit('memoryScanComplete',
-                    { count: 0, error: 'Memories not supported by this radio' });
+        // ---------- wfweb's own memory channels (issue #114) --------------
+        //
+        // A rig with no MemFormat can't be asked what is in a channel, so
+        // there is nothing to list. Instead of refusing, the browser keeps its
+        // own channels in localStorage and serves the same five commands from
+        // there — the panel can't tell the difference. The server does exactly
+        // this in MemoryStore; here the "file" is per-origin browser storage,
+        // keyed by CI-V address so two radios don't share one list.
+        _memIsLocal() {
+            return !this._memFormat();
+        }
+
+        _memLocalKey() {
+            // Hex, so the key reads like the CI-V address everywhere else
+            // does ("...5e" for an IC-718, not its decimal 94).
+            return 'wfweb.memories.' + Number(this.civAddr).toString(16);
+        }
+
+        _memLocalAll() {
+            var o = lsGetJson(this._memLocalKey());
+            return (o && typeof o === 'object') ? o : {};
+        }
+
+        // Same record shape the rig path emits, so the SPA renders either.
+        _memLocalToJson(ch, e) {
+            return {
+                group: 0, channel: ch | 0,
+                frequency: e.freq | 0,
+                mode: civ.codeToMode[e.mode] || ('?' + e.mode),
+                modeReg: e.mode | 0,
+                filter: e.filter | 0 || 1,
+                name: e.name || '',
+                local: true, del: false,
+            };
+        }
+
+        _memLocalScan() {
+            var all = this._memLocalAll();
+            var chans = Object.keys(all).map(Number).sort(function (a, b) { return a - b; });
+            for (var i = 0; i < chans.length; i++) {
+                this._emit('memoryChannel',
+                    { memory: this._memLocalToJson(chans[i], all[chans[i]]) });
+            }
+            this._emit('memoryScanComplete', { count: chans.length, local: true });
+        }
+
+        _memLocalWrite(ch, name) {
+            var freq = this.state.frequency || this.state.vfoAFrequency || 0;
+            if (!(freq > 0)) {
+                this._emit('memoryError', { error: 'No frequency to store yet' });
                 return;
             }
+            var modeCode = civ.modeToCode[this.state.mode || 'USB'];
+            if (typeof modeCode !== 'number') modeCode = 0x01; // USB
+            var all = this._memLocalAll();
+            all[ch] = {
+                freq: freq, mode: modeCode,
+                filter: (this.state.filter | 0) > 0 ? (this.state.filter | 0) : 1,
+                name: String(name || '').trim().slice(0, 32),
+            };
+            if (!lsSetJson(this._memLocalKey(), all)) {
+                this._emit('memoryError', { error: 'Browser storage is full or blocked' });
+                return;
+            }
+            this._emit('memoryChannel', { memory: this._memLocalToJson(ch, all[ch]) });
+        }
+
+        _memLocalRename(ch, name) {
+            var all = this._memLocalAll();
+            if (!all[ch]) {
+                this._emit('memoryError', { error: 'No such memory channel' });
+                return;
+            }
+            all[ch].name = String(name || '').trim().slice(0, 32);
+            lsSetJson(this._memLocalKey(), all);
+            this._emit('memoryChannel', { memory: this._memLocalToJson(ch, all[ch]) });
+        }
+
+        _memLocalClear(ch) {
+            var all = this._memLocalAll();
+            delete all[ch];
+            lsSetJson(this._memLocalKey(), all);
+            this._emit('memoryChannel', { memory: { channel: ch, group: 0, del: true, local: true } });
+        }
+
+        // Tune the VFO, and nothing else. Deliberately no 0x08: on a rig like
+        // the IC-718 that would select the *radio's* channel N, which has
+        // nothing to do with the entry stored here under that number.
+        _memLocalRecall(ch) {
+            var e = this._memLocalAll()[ch];
+            if (!e) {
+                this._emit('memoryError', { error: 'No such memory channel' });
+                return;
+            }
+            if (e.freq > 0) this._enqueue('setFreq', civ.cmdSetFrequency(e.freq));
+            var name = civ.codeToMode[e.mode];
+            if (name) this._enqueue('setMode', civ.cmdSetMode(name, e.filter || 1));
+        }
+
+        _memScanStart(obj) {
+            var fmt = this._memFormat();
+            // No MemFormat: serve wfweb's own channels instead (issue #114).
+            if (!fmt) { this._memLocalScan(); return; }
             // Cancel any previous scan that's still in flight.
             this._memScanCancel();
             var mc = this._memCaps || { memStart: 1, memMax: 0 };
@@ -1992,10 +2096,10 @@
 
         _memWrite(obj) {
             var fmt = this._memFormat();
-            if (!fmt) return;
             if (!obj || obj.channel === undefined) return;
             var ch = obj.channel | 0;
             if (!this._memChannelOk(ch)) return;
+            if (!fmt) { this._memLocalWrite(ch, obj.name); return; }
             var group = (obj.group | 0) || 0;
             // Snapshot current VFO A — the SPA's MEM-write button stores
             // whatever is on VFO A right now. Mirrors webserver.cpp:
@@ -2045,10 +2149,10 @@
 
         _memClear(obj) {
             var fmt = this._memFormat();
-            if (!fmt) return;
             if (!obj || obj.channel === undefined) return;
             var ch = obj.channel | 0;
             if (!this._memChannelOk(ch)) return;
+            if (!fmt) { this._memLocalClear(ch); return; }
             var group = (obj.group | 0) || 0;
             delete this._memCache[group * 65536 + ch];
             this._enqueue('clearMemory:' + ch,
@@ -2068,7 +2172,9 @@
         _memRecall(obj) {
             var mc = this._memCaps;
             var fmt = this._memFormat();
-            if (!mc || !fmt || !obj || obj.channel === undefined) return;
+            if (!obj || obj.channel === undefined) return;
+            if (!fmt) { this._memLocalRecall(obj.channel | 0); return; }
+            if (!mc) return;
             var ch = obj.channel | 0;
             var group = (obj.group | 0) || 0;
             if (!this._memChannelOk(ch) || group < 0) return;
@@ -2150,9 +2256,10 @@
         // does the same from its memoryType cache).
         _memRename(obj) {
             var fmt = this._memFormat();
-            if (!fmt || !obj || obj.channel === undefined) return;
+            if (!obj || obj.channel === undefined) return;
             var ch = obj.channel | 0;
             var group = (obj.group | 0) || 0;
+            if (!fmt) { this._memLocalRename(ch, obj.name); return; }
             var mem = this._memCache[group * 65536 + ch];
             if (!mem || mem.del || mem.empty) {
                 console.warn('[CIV] renameMemory: channel ' + ch + ' group ' + group + ' not cached');
@@ -2434,7 +2541,11 @@
                 dtcsCodes: caps.hasDTCS ? DTCS_CODES : [],
                 hasSpectrum: caps.hasSpectrum,
                 // Memory channels (#92) — same three fields the server's caps carry.
-                hasMemoryMode: !!(this._memCaps && this._memCaps.hasMemoryMode),
+                // MEM is a rig concept: hidden when the channels are wfweb's,
+                // where a 0x08 select would jump to an unrelated rig channel.
+                hasMemoryMode: !!(this._memCaps && this._memCaps.hasMemoryMode)
+                               && !this._memIsLocal(),
+                memoriesLocal: this._memIsLocal(),
                 memGroups: this._memCaps ? this._memCaps.memGroups : 0,
                 memStart:  this._memCaps ? this._memCaps.memStart : 1,
                 spectAmpMax: 160,     // Icom amplitude scale (matches C++ wfweb)

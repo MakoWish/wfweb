@@ -124,6 +124,11 @@ static bool toneModeUsesDtcs(rptAccessTxRx_t m)
 webServer::webServer(QObject *parent) :
     QObject(parent)
 {
+    // wfweb's own memory channels (issue #114), next to the generated TLS
+    // cert. Opened unconditionally: whether it gets used is decided per rig
+    // by memoryContentsSupported(), which needs rigCaps we don't have yet.
+    memStore.open(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)
+                  + "/memories.json");
 }
 
 webServer::~webServer()
@@ -493,6 +498,9 @@ void webServer::receiveRigCaps(rigCapabilities *caps)
 {
     rigCaps = caps;
     tunerRejected = false;   // new rig, new evidence
+    // Each rig keeps its own local channel list, so swapping radios doesn't
+    // hand an IC-718's memories to an IC-706.
+    memStore.setRig(rigCaps ? rigCaps->modelName : QString());
     // Notify connected clients that rig capabilities changed
     if (rigCaps) {
         QJsonObject obj;
@@ -618,7 +626,11 @@ void webServer::receiveRigCaps(rigCapabilities *caps)
         obj["memStart"] = rigCaps->memStart;
         // Rig has a memory-mode toggle (V/M): the browser offers MEM in the
         // VFO cycle only when the rig can actually enter/leave memory mode.
-        obj["hasMemoryMode"] = rigCaps->commands.contains(funcMemoryMode);
+        obj["hasMemoryMode"] = rigCaps->commands.contains(funcMemoryMode)
+                            && memoryContentsSupported();
+        // These channels are wfweb's, not the radio's (issue #114). The panel
+        // says so, and hides anything that would act on the rig's own list.
+        obj["memoriesLocal"] = !memoryContentsSupported();
         sendJsonToAll(obj);
 
         // Issue #76: rigs with an antenna selector but no periodic Antenna
@@ -1613,14 +1625,21 @@ void webServer::handleRestRequest(QTcpSocket *socket, const QString &method,
     if (p == "/api/v1/radio/memories") {
         if (method == "GET") {
             QJsonArray arr;
-            for (auto it = memories.constBegin(); it != memories.constEnd(); ++it) {
-                if (!it.value().del) {
-                    arr.append(memoryToJson(it.value()));
+            if (!memoryContentsSupported()) {
+                // wfweb's own channels (issue #114) — no rig scan behind this
+                // one, so it answers straight away and is always complete.
+                for (const localMemory &m : memStore.all()) arr.append(localMemoryToJson(m));
+            } else {
+                for (auto it = memories.constBegin(); it != memories.constEnd(); ++it) {
+                    if (!it.value().del) {
+                        arr.append(memoryToJson(it.value()));
+                    }
                 }
             }
             QJsonObject resp;
             resp["memories"] = arr;
             resp["count"] = arr.size();
+            resp["local"] = !memoryContentsSupported();
             sendRestResponse(socket, 200, resp);
         } else {
             QJsonObject e; e["error"] = "Method not allowed";
@@ -1640,7 +1659,9 @@ void webServer::handleRestRequest(QTcpSocket *socket, const QString &method,
             sendRestResponse(socket, 503, e); return;
         }
         // Extract channel number from path; optional group in the JSON body.
-        QString mid = p.mid(22); // after "/api/v1/radio/memories/"
+        // Pre-existing off-by-one: "/api/v1/radio/memories/" is 23 characters,
+        // so mid(22) kept the separator and every channel parsed as 0.
+        QString mid = p.mid(23); // after "/api/v1/radio/memories/"
         mid.chop(7); // remove "/recall"
         int ch = mid.toInt();
         if (ch <= 0) {
@@ -1649,6 +1670,14 @@ void webServer::handleRestRequest(QTcpSocket *socket, const QString &method,
         }
         int group = parseBody().value("group").toInt(0);
         QString err;
+        if (!memoryContentsSupported()) {
+            if (!recallLocalMemory(ch, &err)) {
+                QJsonObject e; e["error"] = err;
+                sendRestResponse(socket, 400, e); return;
+            }
+            QJsonObject ok; ok["channel"] = ch; ok["local"] = true;
+            sendRestResponse(socket, 200, ok); return;
+        }
         if (!recallMemoryOnRig(ch, group, &err)) {
             QJsonObject e; e["error"] = err;
             sendRestResponse(socket, 400, e); return;
@@ -2474,12 +2503,10 @@ void webServer::handleCommand(QWebSocket *client, const QJsonObject &cmd)
             sendJsonTo(client, err);
             return;
         }
-        if (!rigCaps->commands.contains(funcMemoryContents) || rigCaps->memParser.isEmpty()) {
-            QJsonObject err;
-            err["type"] = "memoryScanComplete";
-            err["count"] = 0;
-            err["error"] = "Memories not supported by this radio";
-            sendJsonTo(client, err);
+        // Radios that can't report a channel's contents get wfweb's own list
+        // instead of an error (issue #114).
+        if (!memoryContentsSupported()) {
+            sendLocalMemories(client);
             return;
         }
         int start = cmd.contains("start") ? cmd["start"].toInt() : 1;
@@ -2518,6 +2545,13 @@ void webServer::handleCommand(QWebSocket *client, const QJsonObject &cmd)
         int ch = cmd["channel"].toInt(-1);
         int group = cmd.contains("group") ? cmd["group"].toInt() : 0;
         QString err;
+        if (!memoryContentsSupported()) {
+            if (!recallLocalMemory(ch, &err))
+                sendMemoryError(client, err);
+            else
+                qCInfo(logWebServer) << "recallMemory (local): channel=" << ch;
+            return;
+        }
         if (!recallMemoryOnRig(ch, group, &err)) {
             qCWarning(logWebServer) << "recallMemory: channel=" << ch << "group=" << group << ":" << err;
         } else {
@@ -2530,6 +2564,17 @@ void webServer::handleCommand(QWebSocket *client, const QJsonObject &cmd)
         int group = cmd.contains("group") ? cmd["group"].toInt() : 0;
         // Channel 0 is real on zero-based rigs (IC-705/905)
         if (ch < 0 || (ch == 0 && rigCaps->memStart != 0)) return;
+        // Radios that cannot store a channel themselves keep wfweb's own list
+        // (issue #114). Checked before the Main/Sub cache plumbing below,
+        // which only matters on the rig path.
+        if (!memoryContentsSupported()) {
+            QString err;
+            if (!writeLocalMemory(ch, cmd["name"].toString(), &err))
+                sendMemoryError(client, err);
+            else
+                qCInfo(logWebServer) << "writeMemory (local): channel=" << ch;
+            return;
+        }
         // Everything below is captured from the band the operator is actually
         // on. On a Main/Sub rig (IC-7600/7610/785x/7760) the two bands have
         // their own caches, indexed by receiver, so a write from SUB that
@@ -2678,6 +2723,17 @@ void webServer::handleCommand(QWebSocket *client, const QJsonObject &cmd)
         int ch = cmd["channel"].toInt();
         int group = cmd.contains("group") ? cmd["group"].toInt() : 0;
         if (ch <= 0 && !(ch == 0 && rigCaps->memStart == 0)) return;
+        if (!memoryContentsSupported()) {
+            if (!memStore.rename(ch, cmd["name"].toString())) {
+                sendMemoryError(client, "Could not rename that memory");
+                return;
+            }
+            QJsonObject msg;
+            msg["type"] = "memoryChannel";
+            msg["memory"] = localMemoryToJson(memStore.get(ch));
+            sendJsonToAll(msg);
+            return;
+        }
         quint32 key = (quint32(group) << 16) | quint32(ch);
         auto it = memories.find(key);
         if (it == memories.end()) {
@@ -2703,6 +2759,20 @@ void webServer::handleCommand(QWebSocket *client, const QJsonObject &cmd)
         int ch = cmd["channel"].toInt();
         int group = cmd.contains("group") ? cmd["group"].toInt() : 0;
         if (ch <= 0) return;
+        if (!memoryContentsSupported()) {
+            memStore.remove(ch);
+            QJsonObject msg;
+            msg["type"] = "memoryChannel";
+            QJsonObject m;
+            m["channel"] = ch;
+            m["group"] = 0;
+            m["del"] = true;
+            m["local"] = true;
+            msg["memory"] = m;
+            sendJsonToAll(msg);
+            qCInfo(logWebServer) << "clearMemory (local): channel=" << ch;
+            return;
+        }
         // Write a deleted/empty memory via funcMemoryContents (same path as writeMemory)
         memoryType mem;
         mem.channel = ch;
@@ -3486,7 +3556,9 @@ QJsonObject webServer::buildInfoJson() const
         }
         info["memGroups"] = rigCaps->memGroups;
         info["memStart"] = rigCaps->memStart;
-        info["hasMemoryMode"] = rigCaps->commands.contains(funcMemoryMode);
+        info["hasMemoryMode"] = rigCaps->commands.contains(funcMemoryMode)
+                             && memoryContentsSupported();
+        info["memoriesLocal"] = !memoryContentsSupported();
     } else {
         info["connected"] = false;
     }
@@ -4369,7 +4441,7 @@ modeInfo webServer::stringToMode(const QString &mode)
 
 // --- Memory Channels ---
 
-QString webServer::modeRegToString(quint8 reg)
+QString webServer::modeRegToString(quint8 reg) const
 {
     if (rigCaps) {
         for (const modeInfo &mi : rigCaps->modes) {
@@ -4445,6 +4517,164 @@ void webServer::scanNextMemory()
     if (memoryScanTimer) memoryScanTimer->start();
 }
 
+// Can this rig report a memory channel's *contents*? Two halves, and both
+// matter (issue #114):
+//
+//   - funcMemoryContents (CI-V 1A 00 on Icom) is the command that reads a
+//     channel back. The IC-718 and the IC-706 family predate it entirely —
+//     they can select, write and clear a channel, but never say what is in
+//     one, so there is nothing to build a list from.
+//   - memParser is the byte layout that command's payload uses, taken from
+//     the rig file's MemFormat. The IC-746 / IC-756PRO family declare the
+//     command but ship an empty MemFormat, and serializing a memoryType
+//     against an empty parser appends no bytes at all — putting a payload-less
+//     "1A 00" on the wire, which the radio answers with NG.
+//
+// Every entry point that reads or writes channel contents gates on this.
+// Channel *select* (funcMemoryMode / funcMemorySelect) is a separate
+// capability and is checked where it is used, in recallMemoryOnRig().
+bool webServer::memoryContentsSupported() const
+{
+    return rigCaps && rigCaps->commands.contains(funcMemoryContents)
+        && !rigCaps->memParser.isEmpty();
+}
+
+// Report a failed memory action back to the client that asked for it. Before
+// this, the unsupported-rig paths in handleCommand() simply returned, leaving
+// the browser's Save / rename / clear looking like they had worked.
+void webServer::sendMemoryError(QWebSocket *client, const QString &error)
+{
+    QJsonObject obj;
+    obj["type"] = "memoryError";
+    obj["error"] = error;
+    sendJsonTo(client, obj);
+}
+
+// Put a stored frequency + mode onto the VFO. This is all a memory recall can
+// be when the channel's contents live outside the radio (local memories) or
+// when the rig has no channel-select command at all — no tone, no duplex, no
+// split, because neither source carries them.
+void webServer::applyMemoryToVfo(qint64 hz, quint8 modeReg, quint8 filter, quint8 datamode)
+{
+    if (!queue || !rigCaps) return;
+    const uchar rx = rigCaps->hasCommand29
+                   ? (queue->getState().vfo == vfoSub ? 1 : 0) : 0;
+    const vfoCommandType t = queue->getVfoCommand(vfoA, rx, true);
+    if (hz > 0) {
+        freqt f;
+        f.Hz = hz;
+        f.MHzDouble = hz / 1.0E6;
+        f.VFO = activeVFO;
+        queue->addUnique(priorityImmediate, queueItem(t.freqFunc, QVariant::fromValue<freqt>(f), false, t.receiver));
+    }
+    for (const modeInfo &mi : rigCaps->modes) {
+        if (mi.reg == modeReg) {
+            modeInfo m = mi;
+            m.filter = filter > 0 ? filter : 1;
+            m.data = datamode;
+            queue->addUnique(priorityImmediate, queueItem(t.modeFunc, QVariant::fromValue<modeInfo>(m), false, t.receiver));
+            break;
+        }
+    }
+    requestVfoUpdate();
+}
+
+// Local channels reach the browser as the same "memoryChannel" records the rig
+// path sends, so the panel renders both without knowing which it is looking at.
+// The fields a local channel cannot carry are simply left out.
+QJsonObject webServer::localMemoryToJson(const localMemory &m) const
+{
+    QJsonObject o;
+    o["group"] = 0;
+    o["channel"] = m.channel;
+    o["frequency"] = m.frequency;
+    o["mode"] = modeRegToString(m.modeReg);
+    o["modeReg"] = m.modeReg;
+    o["filter"] = m.filter;
+    o["name"] = m.name;
+    o["local"] = true;
+    o["del"] = false;
+    if (m.frequency == 0) o["empty"] = true;
+    return o;
+}
+
+// The local answer to "getMemories". No scan and no timer — the list is
+// already in memory, so every channel goes out at once.
+void webServer::sendLocalMemories(QWebSocket *client)
+{
+    const QList<localMemory> list = memStore.all();
+    for (const localMemory &m : list) {
+        QJsonObject msg;
+        msg["type"] = "memoryChannel";
+        msg["memory"] = localMemoryToJson(m);
+        sendJsonTo(client, msg);
+    }
+    QJsonObject done;
+    done["type"] = "memoryScanComplete";
+    done["count"] = list.size();
+    done["local"] = true;
+    sendJsonTo(client, done);
+}
+
+// Store what the radio is on right now as local channel `channel`.
+bool webServer::writeLocalMemory(int channel, const QString &name, QString *error)
+{
+    if (!queue) {
+        if (error) *error = "Rig not connected";
+        return false;
+    }
+    localMemory m;
+    m.channel = channel;
+    m.name = name;
+
+    // Same cache fallback chain the rig write path uses: rigs differ in which
+    // cache the periodic poll fills, and the IC-718 class fills only funcFreq.
+    const vfoCommandType tA = queue->getVfoCommand(vfoA, 0, false);
+    cacheItem freqCache = queue->getCache(tA.freqFunc, 0);
+    if (!freqCache.value.isValid()) freqCache = queue->getCache(funcSelectedFreq, 0);
+    if (!freqCache.value.isValid()) freqCache = queue->getCache(funcFreq, 0);
+    if (freqCache.value.isValid()) m.frequency = qint64(freqCache.value.value<freqt>().Hz);
+    // Refuse a channel with no frequency rather than storing a 0 Hz entry the
+    // user would have to notice and delete. Same guard the rig path uses.
+    if (m.frequency <= 0) {
+        if (error) *error = "No frequency to store yet";
+        return false;
+    }
+    cacheItem modeCache = queue->getCache(tA.modeFunc, 0);
+    if (!modeCache.value.isValid()) modeCache = queue->getCache(funcSelectedMode, 0);
+    if (!modeCache.value.isValid()) modeCache = queue->getCache(funcMode, 0);
+    if (modeCache.value.isValid()) {
+        const modeInfo mi = modeCache.value.value<modeInfo>();
+        m.modeReg = quint8(mi.reg);
+        m.filter = quint8(mi.filter > 0 ? mi.filter : 1);
+    }
+    if (!memStore.set(m)) {
+        if (error) *error = "Could not save the memory file";
+        return false;
+    }
+    // Everyone watching gets the new row without a rescan.
+    QJsonObject msg;
+    msg["type"] = "memoryChannel";
+    msg["memory"] = localMemoryToJson(m);
+    sendJsonToAll(msg);
+    return true;
+}
+
+// Recall a local channel: tune the VFO, nothing else. Deliberately does NOT
+// touch the rig's own memory mode — on a radio like the IC-718 the CI-V 08
+// select would jump to *its* channel N, which has nothing to do with the entry
+// wfweb is storing under that number.
+bool webServer::recallLocalMemory(int channel, QString *error)
+{
+    if (!memStore.contains(channel)) {
+        if (error) *error = "No such memory channel";
+        return false;
+    }
+    const localMemory m = memStore.get(channel);
+    applyMemoryToVfo(m.frequency, m.modeReg, m.filter, 0);
+    return true;
+}
+
 // Recall a stored channel *on the radio* (issue #92) so the rig itself
 // restores the channel's full contents — mode, filter, repeater tone / tone
 // squelch, duplex direction and offset — instead of replaying freq + mode
@@ -4484,24 +4714,7 @@ bool webServer::recallMemoryOnRig(int channel, int group, QString *error)
             return false;
         }
         const memoryType &mem = it.value();
-        vfoCommandType t = queue->getVfoCommand(vfoA, rx, true);
-        if (mem.frequency.Hz > 0) {
-            freqt f;
-            f.Hz = mem.frequency.Hz;
-            f.MHzDouble = mem.frequency.Hz / 1.0E6;
-            f.VFO = activeVFO;
-            queue->addUnique(priorityImmediate, queueItem(t.freqFunc, QVariant::fromValue<freqt>(f), false, t.receiver));
-        }
-        for (const modeInfo &mi : rigCaps->modes) {
-            if (mi.reg == mem.mode) {
-                modeInfo m = mi;
-                m.filter = mem.filter > 0 ? mem.filter : 1;
-                m.data = mem.datamode;
-                queue->addUnique(priorityImmediate, queueItem(t.modeFunc, QVariant::fromValue<modeInfo>(m), false, t.receiver));
-                break;
-            }
-        }
-        requestVfoUpdate();
+        applyMemoryToVfo(qint64(mem.frequency.Hz), mem.mode, mem.filter, mem.datamode);
         return true;
     }
 

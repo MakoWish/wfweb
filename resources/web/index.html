@@ -2312,7 +2312,7 @@ body.digi-open #bottomBar { grid-row: 5; }
         <!-- Memory modal (styled like QSO Log) -->
         <div id="memoryOverlay" class="mem-modal">
             <div class="mem-modal-title">
-                <span>Memories <span id="memScanStatus"></span></span>
+                <span>Memories <span id="memLocalBadge" class="wf-badge" style="display:none" title="This radio cannot store memory channels over CI-V, so wfweb keeps them itself. They are not written to the radio.">wfweb</span> <span id="memScanStatus"></span></span>
                 <span id="memGroupRow" class="mode-digi" style="display:none;flex:0 0 auto;font-weight:normal;">
                     <label for="memGroupSelect" style="color:var(--mode-accent-dim);">Group</label>
                     <select id="memGroupSelect" class="wf-field" onchange="onMemGroupChange()"></select>
@@ -3248,6 +3248,7 @@ function handleMessage(msg) {
                 if (msg.hasTuner !== undefined) updateHasTuner(!!msg.hasTuner);
                 if (msg.txMeters !== undefined) setTxMeterCaps(msg.txMeters);
                 if (msg.hasMemoryMode !== undefined) hasMemoryMode = !!msg.hasMemoryMode;
+                if (msg.memoriesLocal !== undefined) setMemoriesLocal(!!msg.memoriesLocal);
                 if (msg.memGroups !== undefined) setupMemoryGroups(msg.memGroups, msg.memStart || 0);
                 if (msg.hasPowerControl !== undefined) updateHasPowerControl(msg.hasPowerControl);
                 if (msg.powerOnNeedsRemoteJack !== undefined) powerOnNeedsRemoteJack = !!msg.powerOnNeedsRemoteJack;
@@ -3283,6 +3284,7 @@ function handleMessage(msg) {
             if (msg.hasTuner !== undefined) updateHasTuner(!!msg.hasTuner);
             if (msg.txMeters !== undefined) setTxMeterCaps(msg.txMeters);
             if (msg.hasMemoryMode !== undefined) hasMemoryMode = !!msg.hasMemoryMode;
+            if (msg.memoriesLocal !== undefined) setMemoriesLocal(!!msg.memoriesLocal);
             if (msg.memGroups !== undefined) setupMemoryGroups(msg.memGroups, msg.memStart || 0);
             if (msg.hasPowerControl !== undefined) updateHasPowerControl(msg.hasPowerControl);
             if (msg.powerOnNeedsRemoteJack !== undefined) powerOnNeedsRemoteJack = !!msg.powerOnNeedsRemoteJack;
@@ -3443,6 +3445,9 @@ function handleMessage(msg) {
         case 'memoryScanComplete':
             handleMemoryScanComplete(msg);
             break;
+        case 'memoryError':
+            handleMemoryError(msg);
+            break;
         case 'freedvStatus':
             updateFreeDVStatus(msg);
             break;
@@ -3526,7 +3531,18 @@ function handleMessage(msg) {
 // ============================================================
 // UI UPDATES
 // ============================================================
+// Tuning away from a recalled local channel un-lights its row. Rig memories
+// get this for free: leaving memory mode clears currentVfo.
+function clearLocalMemIfTunedAway(hz) {
+    if (!memoriesLocal || memChannel === null) return;
+    var mem = memoryChannels[(memChannelGroup || 0) * 65536 + memChannel];
+    if (!mem || mem.frequency === hz) return;
+    memChannel = null;
+    if (document.getElementById('memoryOverlay').classList.contains('visible')) renderMemoryList();
+}
+
 function updateFrequency(hz) {
+    clearLocalMemIfTunedAway(hz);
     if (hz === null) {
         // The server sends null when the rig has no frequency to report (blank
         // memory channel). Show dashes rather than drawing 0.000.000.
@@ -5797,6 +5813,8 @@ var memCurrentGroup = 0;     // group the browser is currently reading/writing
 var memCapsSeen = null;      // "memGroups/memStart" caps last applied
 var memScanSeen = null;      // keys reported since the running scan started; null = no scan
 var memListReady = false;    // the viewed group has been read through at least once
+var memErrorTimer = null;    // clears a failed-action message from the title
+var memoriesLocal = false;   // channels are wfweb's own, not the radio's (#114)
 
 // Build the group list + selector from rig caps. memGroups is the highest
 // group number, memStart the lowest; a rig with no groups reports
@@ -5883,7 +5901,7 @@ function refreshMemories() {
         document.getElementById('memoryList').innerHTML =
             '<div class="memory-empty">Scanning...</div>';
     }
-    document.getElementById('memScanStatus').textContent = 'scanning...';
+    setMemStatus('scanning...');
     // Start at 0: zero-based rigs (IC-705/905) have a real channel 0. Rigs
     // whose channels start at 1 just drop the out-of-range first read and
     // the scan moves on.
@@ -5902,7 +5920,10 @@ function renderMemoryList() {
         var mem = memoryChannels[keys[i]];
         if (mem.del || mem.empty) continue;
         var row = document.createElement('div');
-        var isCurrent = currentVfo === 'MEM' && memChannel === mem.channel
+        // Local channels never put the rig in MEM mode — there is no rig
+        // channel to select — so the lit row is driven by the last recall
+        // instead, and cleared as soon as the dial moves off it.
+        var isCurrent = (memoriesLocal || currentVfo === 'MEM') && memChannel === mem.channel
             && (memChannelGroup === null || (mem.group || 0) === memChannelGroup);
         row.className = 'memory-row' + (isCurrent ? ' current' : '');
         row.setAttribute('data-key', keys[i]);
@@ -5999,7 +6020,7 @@ function handleMemoryChannel(msg) {
 function handleMemoryScanComplete(msg) {
     if (msg.error) {
         memScanSeen = null;
-        document.getElementById('memScanStatus').textContent = '';
+        setMemStatus('');
         document.getElementById('memoryList').innerHTML =
             '<div class="memory-empty">' + msg.error + '</div>';
         return;
@@ -6015,8 +6036,7 @@ function handleMemoryScanComplete(msg) {
     }
     memListReady = true;
     memSaveBtnSync();
-    document.getElementById('memScanStatus').textContent =
-        msg.count ? msg.count + ' found' : '';
+    setMemStatus(msg.count ? msg.count + ' found' : '');
     if (document.getElementById('memoryOverlay').classList.contains('visible')) renderMemoryList();
 }
 
@@ -6066,6 +6086,34 @@ function memorySaveConfirm() {
     renderMemoryList();
     memorySaveCancel();
     setTimeout(refreshMemories, 500);
+}
+
+// Radios that can't store a channel themselves (IC-718, IC-706 — issue #114)
+// get wfweb's own list. Same panel, same commands; the badge is there so
+// nobody mistakes these for channels the radio knows about.
+function setMemoriesLocal(local) {
+    memoriesLocal = local;
+    var b = document.getElementById('memLocalBadge');
+    if (b) b.style.display = local ? '' : 'none';
+}
+
+// Single writer for the memory panel's status line, so a red failure message
+// can't outlive the next scan.
+function setMemStatus(text, isError) {
+    var el = document.getElementById('memScanStatus');
+    if (!el) return;
+    clearTimeout(memErrorTimer);
+    el.textContent = text;
+    el.style.color = isError ? 'var(--state-error)' : '';
+    if (isError) memErrorTimer = setTimeout(function () { setMemStatus(''); }, 5000);
+}
+
+// A memory action the rig can't perform — no contents command, or a rig file
+// with no MemFormat (issue #114). The panel is already open, so report it
+// where the scan status goes instead of only in the console.
+function handleMemoryError(msg) {
+    memorySaveCancel();
+    setMemStatus(msg.error || 'Memory command failed', true);
 }
 
 function memorySaveCancel() {

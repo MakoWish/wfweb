@@ -43,6 +43,7 @@
 #include "direwolfprocessor.h"
 #include "ax25linkprocessor.h"
 #include "aprsprocessor.h"
+#include "memorystore.h"
 
 #ifdef Q_OS_MACOS
 class TlsProxyWorker;
@@ -624,9 +625,24 @@ private:
     int memoryScanGroup = 0;
     QTimer *memoryScanTimer = nullptr;
     QJsonObject memoryToJson(const memoryType &mem);
-    QString modeRegToString(quint8 reg);
+    QString modeRegToString(quint8 reg) const;
     void scanNextMemory();
     bool recallMemoryOnRig(int channel, int group, QString *error = nullptr);
+    bool memoryContentsSupported() const;
+    void sendMemoryError(QWebSocket *client, const QString &error);
+
+    // wfweb's own channels, for rigs that can't store one (issue #114).
+    // Used exactly when memoryContentsSupported() is false, so the two paths
+    // never both apply and the browser talks the same protocol to either.
+    MemoryStore memStore;
+    QJsonObject localMemoryToJson(const localMemory &m) const;
+    void sendLocalMemories(QWebSocket *client);
+    bool writeLocalMemory(int channel, const QString &name, QString *error);
+    bool recallLocalMemory(int channel, QString *error);
+    // Replay a stored frequency + mode onto the current VFO. Shared by the
+    // local-memory recall and by recallMemoryOnRig()'s no-select-command
+    // fallback, which does exactly the same thing from the rig's own cache.
+    void applyMemoryToVfo(qint64 hz, quint8 modeReg, quint8 filter, quint8 datamode);
 
     // Repeater access tone (TONE / TSQL / DTCS). Rigs speak one of two
     // dialects — the single "Tone Squelch Type" register (IC-705/9700/905) or
