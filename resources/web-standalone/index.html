@@ -3294,6 +3294,7 @@ var digiLogEditIdx = -1; // index of row currently being edited, -1 = none
 var digiHashBook = null;
 var digiQsoState = 'IDLE';
 var digiQsoPartner = '';
+var digiQsoPartnerBusyWith = ''; // third station the partner was working when we clicked (tail-end); their traffic to it must not trip the auto-desist
 var digiTheirReport = '';  // report they sent us
 var digiOurReport = '';    // report we sent them (for logging)
 // ── ARRL Field Day (#73) — opt-in contest mode; '' leaves standard FT8/FT4 unchanged ──
@@ -9639,7 +9640,8 @@ function digiRowClick(el) {
             var dxCall73 = parts[1].toUpperCase();
             if (dxEl) dxEl.value = dxCall73;
             digiQsoPartner = dxCall73;
-            digiQsoState = 'IDLE';
+            digiQsoPartnerBusyWith = '';
+            digiQsoState = 'CALLING';
             digiTheirReport = '';
             armMessageForQsoState(slotIndex);
             updateDigiMsgRows();
@@ -9653,6 +9655,7 @@ function digiRowClick(el) {
         // Message is addressed to us when parts[0] matches MY CALL
         var msgToMe = myCall && parts[0].toUpperCase() === myCall.toUpperCase();
         if (msgToMe) {
+            digiQsoPartnerBusyWith = '';
             var roundedSnr = Math.round(snr);
             var ourSnrStr = (roundedSnr >= 0 ? '+' : '') + roundedSnr;
             if (/\bRR73\b/i.test(msg) || /\bRRR\b/i.test(msg)) {
@@ -9677,8 +9680,10 @@ function digiRowClick(el) {
                 digiOurReport = ourSnrStr;  // our SNR of them → Tx2 plain report
             }
         } else {
-            // Message not to us — just target that station from IDLE
-            digiQsoState = 'IDLE';
+            // Message not to us (tail-end): call them, and remember who they are
+            // working so the CALLING auto-desist lets them finish that QSO (#115).
+            digiQsoState = 'CALLING';
+            digiQsoPartnerBusyWith = parts[0].toUpperCase();
             digiTheirReport = '';
         }
         // Arm appropriate message based on state
@@ -9998,6 +10003,12 @@ function digiMsgArm(step, enableTx) {
     digiTxQueued = msg;
     digiTxAttempts = 0;
     digiTxArmed = true;
+    if (step === 0 && digiQsoState === 'IDLE' && getDxCall()) {
+        // Arming the initial call by hand is starting a QSO: enter CALLING so the
+        // auto-sequencer advances on the reply instead of resending the grid (#115).
+        digiQsoPartner = getDxCall(); digiQsoPartnerBusyWith = ''; digiTheirReport = '';
+        digiQsoState = 'CALLING';
+    }
     // All manual sends go out on the operator's chosen TX even/odd parity — one
     // slot per cycle (never -1 / "every slot", which keys both halves).
     digiTxSlotParity = digiCqParity;
@@ -10088,6 +10099,7 @@ function queueDigiCqReply(dxCall, decodedSlotIndex) {
     digiTxAttempts = 0;
     digiQsoState = 'CALLING';
     digiQsoPartner = dxCall.toUpperCase();
+    digiQsoPartnerBusyWith = '';
     // Use the slot index of when the CQ was DECODED (captured before the blocking
     // decode call, before JS thread advanced into the next slot). We TX on the slot
     // OPPOSITE to the CQ sender's slot.
@@ -10126,6 +10138,7 @@ function handleDigiAutoQso(decodes, decodedSlotIndex) {
                 if (cqCall && cqCall !== myCall && userDx && userDx === cqCall) {
                     console.log('[DIGI QSO] IDLE→CALLING: targeted station ' + cqCall + ' sent CQ');
                     digiQsoPartner = cqCall;
+                    digiQsoPartnerBusyWith = '';
                     digiTxAttempts = 0;
                     digiTxQueued = cqCall + ' ' + myCall + ' ' + myGrid;
                     digiTxSlotParity = (dSlot + 1) % 2; // TX on slot OPPOSITE to CQ slot
@@ -10151,8 +10164,11 @@ function handleDigiAutoQso(decodes, decodedSlotIndex) {
                 else { console.log('[DIGI QSO] TX disabled — queued but not armed: ' + digiTxQueued); }
                 digiQsoState = 'EXCHANGE';
                 break;
-            } else if (parts.length >= 2 && parts[1] === digiQsoPartner && parts[0] !== myCall && parts[0] !== 'CQ') {
-                // DX station (parts[1] = FROM) sent to someone who is not us (parts[0] = TO ≠ myCall)
+            } else if (parts.length >= 2 && parts[1] === digiQsoPartner && parts[0] !== myCall && parts[0] !== 'CQ' &&
+                       parts[0] !== digiQsoPartnerBusyWith) {
+                // DX station (parts[1] = FROM) sent to someone who is not us (parts[0] = TO ≠ myCall).
+                // Traffic to the station they were already working when we clicked is not a
+                // new QSO — keep calling until they answer someone else or us.
                 console.log('[DIGI QSO] CALLING→IDLE: ' + digiQsoPartner + ' replied to ' + parts[0] + ', not us — disabling TX');
                 digiReArmPending = false;
                 digiTxArmed = false;
@@ -10319,7 +10335,7 @@ function digiFdRowClick(parts, slotIndex, dxEl) {
         // "CQ [FD] <call> <grid>" → open with our exchange
         var cqCall = parts.length >= 3 ? parts[parts.length - 2] : parts[1];
         if (dxEl) dxEl.value = cqCall;
-        digiQsoPartner = cqCall; digiFdLogged = false; digiTheirReport = '';
+        digiQsoPartner = cqCall; digiQsoPartnerBusyWith = ''; digiFdLogged = false; digiTheirReport = '';
         digiTxQueued = cqCall + ' ' + myCall + ' ' + digiFdExch();
         digiQsoState = 'CALLING';
     } else if (parts.length >= 2) {
@@ -10328,6 +10344,7 @@ function digiFdRowClick(parts, slotIndex, dxEl) {
         digiQsoPartner = dxCall;
         if (dxCall !== prevPartner) digiFdLogged = false;
         var toMe = myCall && parts[0] === myCall;
+        digiQsoPartnerBusyWith = toMe ? '' : parts[0];
         var theirExch = digiFdParseExch(parts.slice(2));
         if (toMe && (parts[2] === 'RR73' || parts[2] === 'RRR' || parts[2] === '73')) {
             digiTheirReport = digiTheirReport || '';
@@ -10375,7 +10392,7 @@ function handleDigiFdAutoQso(decodes, decodedSlotIndex) {
                 var cqCall = parts[parts.length - 2];
                 var userDx = getDxCall();
                 if (cqCall && cqCall !== myCall && userDx && userDx === cqCall) {
-                    digiQsoPartner = cqCall; digiFdLogged = false; digiTheirReport = '';
+                    digiQsoPartner = cqCall; digiQsoPartnerBusyWith = ''; digiFdLogged = false; digiTheirReport = '';
                     digiTxQueued = cqCall + ' ' + myCall + ' ' + myExch;
                     digiTxAttempts = 0; digiTxSlotParity = txParity;
                     if (digiTxEnabled) digiTxArmed = true;
@@ -10396,8 +10413,9 @@ function handleDigiFdAutoQso(decodes, decodedSlotIndex) {
                     digiQsoState = 'EXCHANGE';
                     break;
                 }
-            } else if (parts.length >= 2 && parts[1] === digiQsoPartner && parts[0] !== myCall && parts[0] !== 'CQ') {
-                // partner answered someone else → abort
+            } else if (parts.length >= 2 && parts[1] === digiQsoPartner && parts[0] !== myCall && parts[0] !== 'CQ' &&
+                       parts[0] !== digiQsoPartnerBusyWith) {
+                // partner answered someone else (not the station they were already working) → abort
                 console.log('[DIGI FD] ' + digiQsoPartner + ' replied to ' + parts[0] + ', not us — aborting');
                 digiFdResetToIdle();
                 break;
