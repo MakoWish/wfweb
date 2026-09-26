@@ -1003,6 +1003,7 @@ body.digi-open #bottomBar { grid-row: 5; }
     position: relative;
     background: #000810;
     overflow: hidden;
+    touch-action: none;
 }
 .digi-wf-canvas {
     position: absolute;
@@ -1059,9 +1060,16 @@ body.digi-open #bottomBar { grid-row: 5; }
     font-family: var(--font-mono);
     font-size: 11px; font-weight: bold;
     white-space: nowrap;
-    padding: 1px 4px;
+    padding: 4px 10px;
+    min-width: 30px;
+    text-align: center;
     border-radius: 0 0 3px 3px;
+    /* Drag handle: the band itself stays click-through, only the tab grabs */
+    pointer-events: auto;
+    cursor: ew-resize;
+    touch-action: none;
 }
+.digi-wf-label.dragging { filter: brightness(1.3); }
 .digi-wf-tx .digi-wf-label {
     background: rgba(255,136,0,0.85);
     color: #000;
@@ -2642,13 +2650,14 @@ body.digi-open #bottomBar { grid-row: 5; }
                 </div>
             </div>
 
-            <!-- Frequency ruler: 300–2800 Hz, click to set TX/RX freq -->
+            <!-- Frequency ruler: 300–2800 Hz. Click sets RX + TX (TX unless Hold TX),
+                 Shift+click TX only, Ctrl+click RX only, or drag a marker tab. -->
             <div class="digi-waterfall-wrap" id="digiWaterfallWrap">
-                <div class="digi-wf-bar" id="digiWfBar">
+                <div class="digi-wf-bar" id="digiWfBar" title="Click: set RX + TX · Shift+click: TX only · Ctrl+click: RX only · drag a tab to move one marker">
                     <canvas id="digiWfCanvas" class="digi-wf-canvas"></canvas>
                     <canvas id="digiWfLabelCanvas" class="digi-wf-label-canvas"></canvas>
-                    <div id="digiWfRxMarker" class="digi-wf-marker digi-wf-rx"><span class="digi-wf-label">RX</span></div>
-                    <div id="digiWfTxMarker" class="digi-wf-marker digi-wf-tx"><span class="digi-wf-label">TX</span></div>
+                    <div id="digiWfRxMarker" class="digi-wf-marker digi-wf-rx"><span class="digi-wf-label" title="Drag to move RX">RX</span></div>
+                    <div id="digiWfTxMarker" class="digi-wf-marker digi-wf-tx"><span class="digi-wf-label" title="Drag to move TX">TX</span></div>
                 </div>
                 <div class="digi-wf-scale">
                     <span>300</span><span>800</span><span>1.3k</span><span>1.8k</span><span>2.3k</span><span>2.8k</span>
@@ -2659,7 +2668,7 @@ body.digi-open #bottomBar { grid-row: 5; }
             <div class="digi-action-row">
                 <button id="digiLogQsoBtn" class="digi-action-btn wf-btn">Log QSO</button>
                 <button id="digiEraseBtn" class="digi-action-btn wf-btn">Erase</button>
-                <button id="digiHoldTxBtn" class="digi-action-btn wf-btn">Hold TX</button>
+                <button id="digiHoldTxBtn" class="digi-action-btn wf-btn" title="Clicks move RX only; Shift+click or dragging the TX tab still moves TX">Hold TX</button>
                 <div class="digi-freq-group">
                     <span class="digi-field-label">TX:</span>
                     <input type="number" id="digiTxFreqDisplay" class="digi-tx-freq-display" min="300" max="2800" step="1" value="1000">
@@ -3313,7 +3322,7 @@ var digiFdLogged = false;  // guard so each FD QSO is logged once
 var digiCqOnly = false;
 var digiTxFreq = 1000;      // audio TX frequency (Hz) within SSB passband
 var digiRxFreq = 1000;      // audio RX frequency (Hz) — decodes here also appear in Directed
-var digiHoldTxFreq = false; // when true, clicking a row does not change TX freq
+var digiHoldTxFreq = false; // when true, clicks move RX only (Shift+click / TX-tab drag still move TX)
 // Waterfall renderer + circular sample buffer live in
 // resources/web-shared/wf-canvas.js (loaded above). WF_FFT_SIZE,
 // WF_DISPLAY_BINS, WF_FREQ_LOW, WF_FREQ_HIGH, wfBuf, wfBufPos,
@@ -9212,6 +9221,19 @@ function updateDigiRxFreqDisplay() {
     drawDigiWaterfall();
 }
 
+// Move the RX/TX markers the WSJT-X way. Plain click: RX, and TX unless Hold TX.
+// Shift: TX only (overrides Hold TX — explicit intent). Ctrl/Cmd: RX only.
+// `ev` may be undefined (programmatic callers) → behaves as a plain click.
+function digiApplyClickFreq(freq, ev) {
+    if (!(freq >= 200 && freq <= 3000)) return;
+    var shift = !!(ev && ev.shiftKey);
+    var ctrl = !!(ev && (ev.ctrlKey || ev.metaKey));
+    var moveTx = shift || (!ctrl && !digiHoldTxFreq);
+    var moveRx = !shift;
+    if (moveTx) { digiTxFreq = freq; updateDigiTxFreqDisplay(); }
+    if (moveRx) { digiRxFreq = freq; updateDigiRxFreqDisplay(); }
+}
+
 // FT4: 4 tones × 12.5 Hz → center at +18.75 Hz above base
 function digiCenterOffset() {
     return digiMode === 'FT8' ? 3.5 * 6.25 : 1.5 * 12.5;
@@ -9559,7 +9581,7 @@ function renderDigiDecodes() {
         var rowCls = 'digi-decode-row' + (isCq ? ' cq-row' : '') + (isDirected ? ' directed' : isMentioned ? ' highlight' : '') + (hints.worked ? ' worked' : '');
         var snrStr = (d.snr >= 0 ? '+' : '') + d.snr.toFixed(0);
         var dtStr  = (d.dt  >= 0 ? '+' : '') + d.dt.toFixed(1);
-        html += '<div class="' + rowCls + '" data-msg="' + encodeURIComponent(d.msg) + '" data-slot="' + (d.slotIndex || 0) + '" data-freq="' + Math.round(d.freq) + '" data-snr="' + d.snr + '" onclick="digiRowClick(this)" ondblclick="digiRowDblClick(this)">' +
+        html += '<div class="' + rowCls + '" data-msg="' + encodeURIComponent(d.msg) + '" data-slot="' + (d.slotIndex || 0) + '" data-freq="' + Math.round(d.freq) + '" data-snr="' + d.snr + '" onclick="digiRowClick(this, event)" ondblclick="digiRowDblClick(this, event)">' +
             '<span class="digi-decode-snr">'  + snrStr + '</span>' +
             '<span class="digi-decode-dt">'   + dtStr  + '</span>' +
             '<span class="digi-decode-freq">'  + Math.round(d.freq) + '</span>' +
@@ -9608,8 +9630,8 @@ function replaceDigiTransmittingRow(id, d) {
     div.setAttribute('data-msg', encodeURIComponent(d.msg));
     div.setAttribute('data-freq', Math.round(d.freq));
     div.setAttribute('data-snr', d.snr);
-    div.onclick = function() { digiRowClick(this); };
-    div.ondblclick = function() { digiRowDblClick(this); };
+    div.onclick = function(e) { digiRowClick(this, e); };
+    div.ondblclick = function(e) { digiRowDblClick(this, e); };
     div.innerHTML =
         '<span class="digi-decode-snr">TX</span>' +
         '<span class="digi-decode-dt"></span>' +
@@ -9638,8 +9660,8 @@ function appendDigiDirectedRow(d, isTx) {
     div.setAttribute('data-freq', Math.round(d.freq));
     div.setAttribute('data-snr', d.snr);
     div.setAttribute('data-slot', d.slotIndex || 0);
-    div.onclick = function() { digiRowClick(this); };
-    div.ondblclick = function() { digiRowDblClick(this); };
+    div.onclick = function(e) { digiRowClick(this, e); };
+    div.ondblclick = function(e) { digiRowDblClick(this, e); };
     div.innerHTML =
         '<span class="digi-decode-snr">'   + snrStr  + '</span>' +
         '<span class="digi-decode-dt">'    + dtStr   + '</span>' +
@@ -9653,7 +9675,7 @@ function escapeHtml(s) {
     return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
 
-function digiRowClick(el) {
+function digiRowClick(el, ev) {
     if (!checkDigiCallGrid()) return;
     var msg = decodeURIComponent(el.getAttribute('data-msg') || '');
     var slotIndex = parseInt(el.getAttribute('data-slot') || '-1', 10);
@@ -9665,13 +9687,8 @@ function digiRowClick(el) {
     // Ignore clicks on our own transmissions (FROM = parts[1])
     var fromCall = /^CQ$/i.test(parts[0]) ? (parts.length >= 3 ? parts[parts.length - 2] : parts[1]) : parts[1];
     if (myCall && fromCall && fromCall.toUpperCase() === myCall.toUpperCase()) return;
-    // Set TX and RX frequency to match clicked station (unless Hold is enabled)
-    if (freq >= 200 && freq <= 3000 && !digiHoldTxFreq) {
-        digiTxFreq = freq;
-        digiRxFreq = freq;
-        updateDigiTxFreqDisplay();
-        updateDigiRxFreqDisplay();
-    }
+    // Move the markers to the clicked station (RX always, TX unless Hold TX; Shift = TX only)
+    digiApplyClickFreq(freq, ev);
     if (digiContestMode === 'FD') {
         if (!digiFdReady()) { updateDigiStatus('Set FD class/section', ''); updateDigiMsgRows(); return; }
         digiFdRowClick(parts, slotIndex, dxEl);
@@ -9746,7 +9763,7 @@ function digiRowClick(el) {
 }
 
 // Double-click on a DECODE row (All Decodes / Directed): run click logic then enable TX + arm.
-function digiRowDblClick(el) {
+function digiRowDblClick(el, ev) {
     if (!checkDigiCallGrid()) return;
     // If a transmission is already in progress, abort it transparently so the
     // new selection takes over immediately (same slot if phase allows).
@@ -9764,7 +9781,7 @@ function digiRowDblClick(el) {
         // correct-parity slot.
         digiSwitchAbortedSlot = getDigiSlotInfo().slotIndex;
     }
-    digiRowClick(el); // sets DX, queues message, updates state
+    digiRowClick(el, ev); // sets DX, queues message, updates state
     if (!digiTxEnabled) {
         digiTxEnabled = true;
         var etb = document.getElementById('digiEnableTxBtn');
@@ -11545,25 +11562,53 @@ function initDigiHandlers() {
         });
     }
 
-    // Waterfall click/touch → set TX (and RX) freq
+    // Waterfall click/tap → set RX + TX freq (modifiers pick one, see digiApplyClickFreq).
+    // Pointer events cover mouse + touch in one handler; .digi-wf-bar has touch-action:none.
     var wfBar = document.getElementById('digiWfBar');
     if (wfBar) {
-        var handleWfPointer = function(e) {
-            e.preventDefault();
+        // Pointer X → signal BASE frequency (click position = center of the tone span)
+        var wfFreqFromX = function(clientX) {
             var rect = wfBar.getBoundingClientRect();
-            var clientX = e.touches ? e.touches[0].clientX : e.clientX;
-            // Click position = center of signal; subtract offset to get base (tone 0) frequency
             var freq = WF_FREQ_LOW + Math.round(((clientX - rect.left) / rect.width) * (WF_FREQ_HIGH - WF_FREQ_LOW)) - Math.round(digiCenterOffset());
-            freq = Math.max(200, Math.min(2700, freq));
-            if (!digiHoldTxFreq) {
-                digiTxFreq = freq;
-                digiRxFreq = freq;
-                updateDigiTxFreqDisplay();
-                updateDigiRxFreqDisplay();
-            }
+            return Math.max(200, Math.min(2700, freq));
         };
-        wfBar.addEventListener('mousedown', handleWfPointer);
-        wfBar.addEventListener('touchstart', handleWfPointer, { passive: false });
+        wfBar.addEventListener('pointerdown', function(e) {
+            if (e.button !== 0) return;
+            e.preventDefault();
+            digiApplyClickFreq(wfFreqFromX(e.clientX), e);
+        });
+        // The TX / RX tabs are drag handles: dragging one moves only that marker
+        // (touch has no Shift/Ctrl). Dragging TX ignores Hold TX — explicit intent.
+        [['digiWfTxMarker', 'tx'], ['digiWfRxMarker', 'rx']].forEach(function(pair) {
+            var marker = document.getElementById(pair[0]);
+            var tab = marker && marker.querySelector('.digi-wf-label');
+            if (!tab) return;
+            var which = pair[1];
+            var applyDrag = function(e) {
+                var freq = wfFreqFromX(e.clientX);
+                if (which === 'tx') { digiTxFreq = freq; updateDigiTxFreqDisplay(); }
+                else { digiRxFreq = freq; updateDigiRxFreqDisplay(); }
+            };
+            tab.addEventListener('pointerdown', function(e) {
+                if (e.button !== 0) return;
+                e.preventDefault();
+                e.stopPropagation(); // don't let the bar treat this as a click
+                tab.setPointerCapture(e.pointerId);
+                tab.classList.add('dragging');
+            });
+            tab.addEventListener('pointermove', function(e) {
+                if (!tab.hasPointerCapture(e.pointerId)) return;
+                applyDrag(e);
+            });
+            var endDrag = function(e) {
+                if (!tab.hasPointerCapture(e.pointerId)) return;
+                applyDrag(e);
+                tab.releasePointerCapture(e.pointerId);
+                tab.classList.remove('dragging');
+            };
+            tab.addEventListener('pointerup', endDrag);
+            tab.addEventListener('pointercancel', endDrag);
+        });
         drawDigiWaterfall();
     }
 
