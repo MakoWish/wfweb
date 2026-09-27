@@ -3,6 +3,7 @@
 #include <codec2/freedv_api.h>
 #include "logcategories.h"
 #include "wfweb_version.h"
+#include "wsjtxmessage.h"
 
 #include <QStandardPaths>
 #include <QDir>
@@ -14,6 +15,7 @@
 #include <QTimer>
 #include <QThread>
 #include <QDateTime>
+#include <QHostInfo>
 
 #ifdef Q_OS_WIN
 #include <windows.h>
@@ -122,10 +124,16 @@ static bool toneModeUsesDtcs(rptAccessTxRx_t m)
 webServer::webServer(QObject *parent) :
     QObject(parent)
 {
+    // wfweb's own memory channels (issue #114), next to the generated TLS
+    // cert. Opened unconditionally: whether it gets used is decided per rig
+    // by memoryContentsSupported(), which needs rigCaps we don't have yet.
+    memStore.open(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)
+                  + "/memories.json");
 }
 
 webServer::~webServer()
 {
+    wsjtxSendClose();
     // Restore DATA MOD OFF setting if mic was active.  ~servermain() waits
     // for the queue to dispatch this before it closes the rig port.
     if (dataOffModSaved && queue) {
@@ -490,6 +498,9 @@ void webServer::receiveRigCaps(rigCapabilities *caps)
 {
     rigCaps = caps;
     tunerRejected = false;   // new rig, new evidence
+    // Each rig keeps its own local channel list, so swapping radios doesn't
+    // hand an IC-718's memories to an IC-706.
+    memStore.setRig(rigCaps ? rigCaps->modelName : QString());
     // Notify connected clients that rig capabilities changed
     if (rigCaps) {
         QJsonObject obj;
@@ -541,6 +552,23 @@ void webServer::receiveRigCaps(rigCapabilities *caps)
             }
             obj["spans"] = spans;
         }
+        if (!rigCaps->scopeModes.empty()) {
+            // The rig's scope modes (Center / Fixed / Scroll-C / Scroll-F) as the
+            // rig file lists them; the browser picks which keys to show.
+            QJsonArray scopeModes;
+            for (const genericType &m : rigCaps->scopeModes) {
+                if (m.num > 3) continue;
+                QJsonObject sm;
+                sm["num"] = (int)m.num;
+                sm["name"] = m.name;
+                scopeModes.append(sm);
+            }
+            obj["scopeModes"] = scopeModes;
+        }
+        // The browser may set the Fixed-mode window (setScopeEdges) only when the
+        // rig file carries the 0x27 0x1E range table and both edge commands.
+        obj["scopeFixedEdges"] = !rigCaps->scopeEdgeRanges.empty() &&
+            rigCaps->commands.contains(funcScopeFixedEdgeFreq) && rigCaps->commands.contains(funcScopeEdge);
         if (!rigCaps->preamps.empty()) {
             QJsonArray preamps;
             for (const genericType &p : rigCaps->preamps) {
@@ -598,7 +626,11 @@ void webServer::receiveRigCaps(rigCapabilities *caps)
         obj["memStart"] = rigCaps->memStart;
         // Rig has a memory-mode toggle (V/M): the browser offers MEM in the
         // VFO cycle only when the rig can actually enter/leave memory mode.
-        obj["hasMemoryMode"] = rigCaps->commands.contains(funcMemoryMode);
+        obj["hasMemoryMode"] = rigCaps->commands.contains(funcMemoryMode)
+                            && memoryContentsSupported();
+        // These channels are wfweb's, not the radio's (issue #114). The panel
+        // says so, and hides anything that would act on the rig's own list.
+        obj["memoriesLocal"] = !memoryContentsSupported();
         sendJsonToAll(obj);
 
         // Issue #76: rigs with an antenna selector but no periodic Antenna
@@ -695,9 +727,13 @@ void webServer::onHttpReadyRead()
     QString method = QString::fromUtf8(parts[0]);
     QString path = QString::fromUtf8(parts[1]);
 
-    // Strip query string
+    // Split off the query string; the logbook list endpoint takes parameters
+    QUrlQuery query;
     int qIdx = path.indexOf('?');
-    if (qIdx >= 0) path = path.left(qIdx);
+    if (qIdx >= 0) {
+        query.setQuery(path.mid(qIdx + 1));
+        path = path.left(qIdx);
+    }
 
     // OPTIONS preflight for CORS
     if (method == "OPTIONS") {
@@ -707,7 +743,7 @@ void webServer::onHttpReadyRead()
 
     // REST API routing
     if (path.startsWith("/api/v1/")) {
-        handleRestRequest(socket, method, path, body);
+        handleRestRequest(socket, method, path, query, body);
         return;
     }
 
@@ -832,6 +868,8 @@ void webServer::sendHttpResponse(QTcpSocket *socket, int statusCode, const QStri
     QByteArray response;
     response.append(QString("HTTP/1.1 %1 %2\r\n").arg(statusCode).arg(statusText).toUtf8());
     response.append("Content-Type: " + contentType + "\r\n");
+    if (contentType.startsWith("application/x-adif"))
+        response.append("Content-Disposition: attachment; filename=logbook.adi\r\n");
     response.append(QString("Content-Length: %1\r\n").arg(body.size()).toUtf8());
     response.append("Connection: close\r\n");
     response.append("Access-Control-Allow-Origin: *\r\n");
@@ -882,7 +920,8 @@ void webServer::sendRestResponse(QTcpSocket *socket, int statusCode, const QJson
 }
 
 void webServer::handleRestRequest(QTcpSocket *socket, const QString &method,
-                                   const QString &path, const QByteArray &body)
+                                   const QString &path, const QUrlQuery &query,
+                                   const QByteArray &body)
 {
     // Normalize path: strip trailing slash
     QString p = path;
@@ -896,6 +935,146 @@ void webServer::handleRestRequest(QTcpSocket *socket, const QString &method,
         if (err.error != QJsonParseError::NoError || !doc.isObject()) return QJsonObject();
         return doc.object();
     };
+
+    // --- Station identity: one callsign + grid for the whole server ---
+    if (p == "/api/v1/station") {
+        if (method == "GET") {
+            sendRestResponse(socket, 200, QJsonObject{{"callsign", reporterCallsign}, {"grid", reporterGrid}});
+        } else if (method == "PUT" || method == "POST") {
+            const QJsonObject in = parseBody();
+            applyStationCallsign(in.value("callsign").toString(), in.value("grid").toString(), true);
+            sendRestResponse(socket, 200, QJsonObject{{"callsign", reporterCallsign}, {"grid", reporterGrid}});
+        } else {
+            sendRestResponse(socket, 405, QJsonObject{{"error", "Method not allowed"}});
+        }
+        return;
+    }
+
+    // --- Station logbook (see logbook.h) ---
+    // The log is never returned whole: GET pages newest-first with a cursor
+    // so a lifetime log stays cheap for the browser and the Pi alike.
+    if (p == "/api/v1/logbook/adif") {
+        if (method == "GET") {
+            // ?new=1: only records without an export stamp, as plain ADIF
+            // without wfweb's own fields (a file for other services).  A
+            // client that wants to confirm the export uses /export instead,
+            // which also returns the ids.
+            if (query.queryItemValue("new") == "1") {
+                sendHttpResponse(socket, 200, "OK", "application/x-adif; charset=utf-8", logbook_.toAdif(true, false));
+                return;
+            }
+            QFile file(logbook_.path());
+            if (!file.open(QIODevice::ReadOnly)) {
+                sendHttpResponse(socket, 500, "Internal Server Error", "text/plain",
+                                 file.errorString().toUtf8());
+                return;
+            }
+            sendHttpResponse(socket, 200, "OK", "application/x-adif; charset=utf-8", file.readAll());
+        } else if (method == "POST") {
+            // Import: merge every record of the posted ADIF document.  An
+            // imported file normally comes from a log that already handled
+            // its own uploads, so its records count as exported unless the
+            // caller says ?new=1.
+            QList<QsoRecord> incoming = Logbook::parseAdif(body);
+            if (query.queryItemValue("new") != "1") {
+                const QString stamp = Logbook::exportStamp();
+                for (QsoRecord &r : incoming)
+                    if (r.exported.isEmpty()) r.exported = stamp;
+            }
+            const int added = logbook_.merge(incoming);
+            qInfo() << "Logbook: imported" << added << "of" << incoming.size() << "QSOs over REST";
+            if (added) logbookReset();
+            sendRestResponse(socket, 202, QJsonObject{{"added", added}, {"skipped", incoming.size() - added},
+                                                     {"total", logbook_.count()}, {"unexported", logbook_.unexportedCount()}});
+        } else {
+            sendRestResponse(socket, 405, QJsonObject{{"error", "Method not allowed"}});
+        }
+        return;
+    }
+    if (p == "/api/v1/logbook/worked") {
+        if (method != "GET") { sendRestResponse(socket, 405, QJsonObject{{"error", "Method not allowed"}}); return; }
+        sendRestResponse(socket, 200, QJsonObject{{"calls", logbook_.workedCalls()}, {"total", logbook_.count()}});
+        return;
+    }
+    if (p == "/api/v1/logbook/export") {
+        // The "download new QSOs" document plus the ids it contains, taken
+        // together so the client can confirm exactly what it saved.
+        if (method != "GET") {
+            sendRestResponse(socket, 405, QJsonObject{{"error", "Method not allowed"}});
+            return;
+        }
+        const QStringList ids = logbook_.unexportedIds();
+        sendRestResponse(socket, 200, QJsonObject{{"count", ids.size()},
+                                                 {"ids", QJsonArray::fromStringList(ids)},
+                                                 {"adif", QString::fromUtf8(logbook_.toAdif(true, false))}});
+        return;
+    }
+    if (p == "/api/v1/logbook/exported") {
+        // The client that saved a "new" download reports the ids it got.
+        if (method != "POST") {
+            sendRestResponse(socket, 405, QJsonObject{{"error", "Method not allowed"}});
+            return;
+        }
+        QStringList ids;
+        const QJsonArray arr = parseBody().value("ids").toArray();
+        for (const QJsonValue &v : arr) ids.append(v.toString());
+        const int marked = logbook_.markExported(ids);
+        if (marked) {
+            qInfo() << "Logbook:" << marked << "QSOs marked as exported";
+            logbookReset();
+        }
+        sendRestResponse(socket, 200, QJsonObject{{"marked", marked}, {"unexported", logbook_.unexportedCount()}});
+        return;
+    }
+    if (p == "/api/v1/logbook") {
+        if (method == "GET") {
+            const Logbook::Page pg = logbook_.page(query.queryItemValue("limit").toInt(),
+                                                   query.queryItemValue("before"),
+                                                   query.queryItemValue("call"));
+            QJsonArray entries;
+            for (const QsoRecord &r : pg.entries) entries.append(r.toJson());
+            QJsonObject out{{"entries", entries}, {"total", logbook_.count()},
+                            {"unexported", logbook_.unexportedCount()}};
+            if (!pg.next.isEmpty()) out["next"] = pg.next;
+            sendRestResponse(socket, 200, out);
+        } else if (method == "POST") {
+            QsoRecord r = QsoRecord::fromJson(parseBody());
+            if (!r.isValid()) {
+                sendRestResponse(socket, 400, QJsonObject{{"error", "A valid call is required"}});
+            } else if (!logbookAdd(r)) {
+                sendRestResponse(socket, 500, QJsonObject{{"error", "Logbook is not writable"}});
+            } else {
+                sendRestResponse(socket, 202, r.toJson());
+            }
+        } else if (method == "DELETE") {
+            if (logbookClear("REST")) sendRestResponse(socket, 202, QJsonObject{{"status", "cleared"}});
+            else sendRestResponse(socket, 500, QJsonObject{{"error", "Logbook is not writable"}});
+        } else {
+            sendRestResponse(socket, 405, QJsonObject{{"error", "Method not allowed"}});
+        }
+        return;
+    }
+    if (p.startsWith("/api/v1/logbook/")) {
+        const QString id = p.mid(QStringLiteral("/api/v1/logbook/").size());
+        if (!logbook_.find(id)) {
+            sendRestResponse(socket, 404, QJsonObject{{"error", "QSO not found"}});
+        } else if (method == "PUT") {
+            const QsoRecord r = QsoRecord::fromJson(parseBody(), id);
+            if (!r.isValid()) {
+                sendRestResponse(socket, 400, QJsonObject{{"error", "A valid call is required"}});
+            } else if (!logbookUpdate(id, r)) {
+                sendRestResponse(socket, 500, QJsonObject{{"error", "Logbook is not writable"}});
+            } else {
+                sendRestResponse(socket, 200, logbook_.find(id)->toJson());
+            }
+        } else if (method == "DELETE") {
+            logbookRemove(id);
+            sendRestResponse(socket, 202, QJsonObject{{"status", "deleted"}});
+        } else {
+            sendRestResponse(socket, 405, QJsonObject{{"error", "Method not allowed"}});
+        }
+        return;
+    }
 
     // --- GET /api/v1/radio ---
     if (p == "/api/v1/radio") {
@@ -1446,14 +1625,21 @@ void webServer::handleRestRequest(QTcpSocket *socket, const QString &method,
     if (p == "/api/v1/radio/memories") {
         if (method == "GET") {
             QJsonArray arr;
-            for (auto it = memories.constBegin(); it != memories.constEnd(); ++it) {
-                if (!it.value().del) {
-                    arr.append(memoryToJson(it.value()));
+            if (!memoryContentsSupported()) {
+                // wfweb's own channels (issue #114) — no rig scan behind this
+                // one, so it answers straight away and is always complete.
+                for (const localMemory &m : memStore.all()) arr.append(localMemoryToJson(m));
+            } else {
+                for (auto it = memories.constBegin(); it != memories.constEnd(); ++it) {
+                    if (!it.value().del) {
+                        arr.append(memoryToJson(it.value()));
+                    }
                 }
             }
             QJsonObject resp;
             resp["memories"] = arr;
             resp["count"] = arr.size();
+            resp["local"] = !memoryContentsSupported();
             sendRestResponse(socket, 200, resp);
         } else {
             QJsonObject e; e["error"] = "Method not allowed";
@@ -1473,7 +1659,9 @@ void webServer::handleRestRequest(QTcpSocket *socket, const QString &method,
             sendRestResponse(socket, 503, e); return;
         }
         // Extract channel number from path; optional group in the JSON body.
-        QString mid = p.mid(22); // after "/api/v1/radio/memories/"
+        // Pre-existing off-by-one: "/api/v1/radio/memories/" is 23 characters,
+        // so mid(22) kept the separator and every channel parsed as 0.
+        QString mid = p.mid(23); // after "/api/v1/radio/memories/"
         mid.chop(7); // remove "/recall"
         int ch = mid.toInt();
         if (ch <= 0) {
@@ -1482,6 +1670,14 @@ void webServer::handleRestRequest(QTcpSocket *socket, const QString &method,
         }
         int group = parseBody().value("group").toInt(0);
         QString err;
+        if (!memoryContentsSupported()) {
+            if (!recallLocalMemory(ch, &err)) {
+                QJsonObject e; e["error"] = err;
+                sendRestResponse(socket, 400, e); return;
+            }
+            QJsonObject ok; ok["channel"] = ch; ok["local"] = true;
+            sendRestResponse(socket, 200, ok); return;
+        }
         if (!recallMemoryOnRig(ch, group, &err)) {
             QJsonObject e; e["error"] = err;
             sendRestResponse(socket, 400, e); return;
@@ -1758,7 +1954,39 @@ void webServer::handleCommand(QWebSocket *client, const QJsonObject &cmd)
 {
     QString type = cmd["cmd"].toString();
 
-    if (type == "setFrequency") {
+    if (type == "qsoLogged") {
+        QsoRecord r = QsoRecord::fromJson(cmd["qso"].toObject());
+        if (!logbookAdd(r))
+            qWarning() << "Web: qsoLogged ignored (invalid record or logbook not writable)";
+    }
+    else if (type == "updateQso") {
+        const QString id = cmd["id"].toString();
+        logbookUpdate(id, QsoRecord::fromJson(cmd["qso"].toObject(), id));
+    }
+    else if (type == "deleteQso") {
+        logbookRemove(cmd["id"].toString());
+    }
+    else if (type == "mergeLogbook") {
+        // Migration of a browser-local (localStorage) log.  The browser drops
+        // its copy only when this reply says the merge is on persistent
+        // storage; otherwise it keeps it and re-sends on every connect.
+        QList<QsoRecord> incoming;
+        const QJsonArray entries = cmd["entries"].toArray();
+        for (const QJsonValue &v : entries) {
+            QsoRecord r = QsoRecord::fromJson(v.toObject());
+            if (r.stationCall.isEmpty()) r.stationCall = reporterCallsign;   // logged at this station
+            incoming.append(r);
+        }
+        const int added = logbook_.merge(incoming);
+        if (added) {
+            qInfo() << "Logbook: merged" << added << "of" << incoming.size() << "browser-local QSOs";
+            logbookReset();
+        }
+        sendJsonTo(client, QJsonObject{{"type", "logbookMerged"}, {"added", added},
+                                       {"total", logbook_.count()}, {"persistent", logbookPersistent_},
+                                       {"unexported", logbook_.unexportedCount()}});
+    }
+    else if (type == "setFrequency") {
         quint64 hz = cmd["value"].toVariant().toULongLong();
         if (hz > 0) {
             freqt f;
@@ -1799,6 +2027,7 @@ void webServer::handleCommand(QWebSocket *client, const QJsonObject &cmd)
             // Memory mode — the front-panel V/M (bare CI-V 08 / FR2). Leave
             // activeVfoLocal alone so a later switch back to VFO returns here.
             if (rigCaps && rigCaps->commands.contains(funcMemoryMode)) {
+                memModeLocal = true;
                 queue->addUnique(priorityImmediate, queueItem(funcSelectVFO, QVariant::fromValue<vfo_t>(vfoMem), false));
                 requestVfoUpdate();
             }
@@ -1820,6 +2049,7 @@ void webServer::handleCommand(QWebSocket *client, const QJsonObject &cmd)
         }
         activeVfoLocal = v;
         activeReceiver = wantB ? 1 : 0;
+        memModeLocal = false;
         queue->addUnique(priorityImmediate, queueItem(funcSelectVFO, QVariant::fromValue<vfo_t>(v), false));
         requestVfoUpdate();
     }
@@ -2101,6 +2331,39 @@ void webServer::handleCommand(QWebSocket *client, const QJsonObject &cmd)
         if (rigCaps && rigCaps->commands.contains(funcScopeSpeed))
             queue->addUnique(priorityImmediate, queueItem(funcScopeSpeed, QVariant::fromValue<uchar>(speed), false, 0));
     }
+    else if (type == "setScopeMode") {
+        // Scope mode (0x27 0x14): 0 = Center, 1 = Fixed, 2 = Scroll-C,
+        // 3 = Scroll-F. The browser draws whichever the rig reports (the mode
+        // rides in every spectrum frame) and re-commands its last pick on
+        // connect, so nothing forces Center any more (issue #113).
+        uchar mode = static_cast<uchar>(qBound(0, cmd["value"].toInt(), 3));
+        if (rigCaps && rigCaps->commands.contains(funcScopeMode))
+            queue->addUnique(priorityImmediate, queueItem(funcScopeMode, QVariant::fromValue<uchar>(mode), false, 0));
+    }
+    else if (type == "setScopeEdges") {
+        // Fixed-mode window, lower/upper in Hz (issue #113). Written into edge
+        // set 3 of the frequency range that holds it (0x27 0x1E), leaving sets
+        // 1 and 2 as the operator set them on the rig, then that set is
+        // selected (0x27 0x16). Rigs without a range table in their rig file
+        // don't get here: rigInfo reports scopeFixedEdges=false.
+        quint64 lower = static_cast<quint64>(cmd["lower"].toDouble());
+        quint64 upper = static_cast<quint64>(cmd["upper"].toDouble());
+        if (rigCaps && upper > lower && rigCaps->commands.contains(funcScopeFixedEdgeFreq) && rigCaps->commands.contains(funcScopeEdge)) {
+            scopeEdgeSetting e;
+            for (const genericType &r : rigCaps->scopeEdgeRanges) {
+                if (lower >= r.minFreq && upper <= r.maxFreq) { e.range = r.num; break; }
+            }
+            if (e.range) {
+                e.edge = 3;
+                e.lower = lower;
+                e.upper = upper;
+                queue->addUnique(priorityImmediate, queueItem(funcScopeFixedEdgeFreq, QVariant::fromValue<scopeEdgeSetting>(e), false, 0));
+                queue->addUnique(priorityImmediate, queueItem(funcScopeEdge, QVariant::fromValue<uchar>(e.edge), false, 0));
+            } else {
+                qCInfo(logWebServer) << "setScopeEdges: no fixed-edge range holds" << lower << "-" << upper << "Hz";
+            }
+        }
+    }
     else if (type == "enableAudio") {
         bool enable = cmd["value"].toBool();
         if (enable) {
@@ -2240,18 +2503,20 @@ void webServer::handleCommand(QWebSocket *client, const QJsonObject &cmd)
             sendJsonTo(client, err);
             return;
         }
-        if (!rigCaps->commands.contains(funcMemoryContents) || rigCaps->memParser.isEmpty()) {
-            QJsonObject err;
-            err["type"] = "memoryScanComplete";
-            err["count"] = 0;
-            err["error"] = "Memories not supported by this radio";
-            sendJsonTo(client, err);
+        // Radios that can't report a channel's contents get wfweb's own list
+        // instead of an error (issue #114).
+        if (!memoryContentsSupported()) {
+            sendLocalMemories(client);
             return;
         }
         int start = cmd.contains("start") ? cmd["start"].toInt() : 1;
         int end = cmd.contains("end") ? cmd["end"].toInt() : 99;
         int group = cmd.contains("group") ? cmd["group"].toInt() : 0;
-        memories.clear();
+        // The cached channels stay put while the rig is re-read: a rename
+        // during the scan still finds its source and a client that connects
+        // mid-scan gets the previous picture. Whatever the scan does not
+        // report again is dropped when it completes (scanNextMemory) (#108).
+        memoryScanSeen.clear();
         memoryScanActive = true;
         memoryScanCurrent = start;
         memoryScanEnd = end;
@@ -2263,9 +2528,12 @@ void webServer::handleCommand(QWebSocket *client, const QJsonObject &cmd)
             memoryScanTimer->setInterval(500);
             connect(memoryScanTimer, &QTimer::timeout, this, &webServer::scanNextMemory);
         }
-        // Request first channel
+        // Request first channel. Memory reads and writes are addressed by
+        // channel, so two of them are never duplicates of each other: plain
+        // add(), not addUnique(), which compares command and receiver only
+        // and would evict a queued request for a *different* channel (#108).
         uint val = (uint(group) << 16) | uint(start);
-        queue->addUnique(priorityImmediate, queueItem(funcMemoryContents, QVariant::fromValue<uint>(val), false, 0));
+        queue->add(priorityImmediate, queueItem(funcMemoryContents, QVariant::fromValue<uint>(val), false, 0));
         memoryScanTimer->start();
     }
     else if (type == "recallMemory") {
@@ -2277,6 +2545,13 @@ void webServer::handleCommand(QWebSocket *client, const QJsonObject &cmd)
         int ch = cmd["channel"].toInt(-1);
         int group = cmd.contains("group") ? cmd["group"].toInt() : 0;
         QString err;
+        if (!memoryContentsSupported()) {
+            if (!recallLocalMemory(ch, &err))
+                sendMemoryError(client, err);
+            else
+                qCInfo(logWebServer) << "recallMemory (local): channel=" << ch;
+            return;
+        }
         if (!recallMemoryOnRig(ch, group, &err)) {
             qCWarning(logWebServer) << "recallMemory: channel=" << ch << "group=" << group << ":" << err;
         } else {
@@ -2289,6 +2564,34 @@ void webServer::handleCommand(QWebSocket *client, const QJsonObject &cmd)
         int group = cmd.contains("group") ? cmd["group"].toInt() : 0;
         // Channel 0 is real on zero-based rigs (IC-705/905)
         if (ch < 0 || (ch == 0 && rigCaps->memStart != 0)) return;
+        // Radios that cannot store a channel themselves keep wfweb's own list
+        // (issue #114). Checked before the Main/Sub cache plumbing below,
+        // which only matters on the rig path.
+        if (!memoryContentsSupported()) {
+            QString err;
+            if (!writeLocalMemory(ch, cmd["name"].toString(), &err))
+                sendMemoryError(client, err);
+            else
+                qCInfo(logWebServer) << "writeMemory (local): channel=" << ch;
+            return;
+        }
+        // Everything below is captured from the band the operator is actually
+        // on. On a Main/Sub rig (IC-7600/7610/785x/7760) the two bands have
+        // their own caches, indexed by receiver, so a write from SUB that
+        // reads receiver 0 stores MAIN's frequency and mode instead (#108).
+        // A/B rigs have one receiver and reach the selected VFO through
+        // funcSelectedFreq/Mode, so rx stays 0 and nothing changes for them.
+        bool memCmd29 = rigCaps->hasCommand29;
+        uchar memRx = memCmd29 ? (queue->getState().vfo == vfoSub ? 1 : 0) : 0;
+        // A cache is only keyed by receiver when the rig scopes that command
+        // with the 0x29 prefix. Commands it does not scope — every command on
+        // the IC-7600, which has no 0x29 at all — always answer under
+        // receiver 0, so asking for receiver 1 would miss them entirely.
+        auto memCacheRx = [&](funcs f) -> uchar {
+            if (!memCmd29 || memRx == 0) return 0;
+            auto it = rigCaps->commands.find(f);
+            return (it != rigCaps->commands.end() && it.value().cmd29) ? memRx : 0;
+        };
         // Build memoryType from current VFO state
         memoryType mem;
         mem.channel = ch;
@@ -2322,11 +2625,11 @@ void webServer::handleCommand(QWebSocket *client, const QJsonObject &cmd)
         // direction and the tone mode into a single byte, so writing one
         // without the other silently clears the repeater shift.
         mem.tonemode = static_cast<quint8>(currentToneMode());
-        cacheItem toneCache = queue->getCache(funcToneFreq, 0);
+        cacheItem toneCache = queue->getCache(funcToneFreq, memCacheRx(funcToneFreq));
         if (toneCache.value.isValid()) mem.tone = toneCache.value.value<toneInfo>().name;
-        cacheItem tsqlCache = queue->getCache(funcTSQLFreq, 0);
+        cacheItem tsqlCache = queue->getCache(funcTSQLFreq, memCacheRx(funcTSQLFreq));
         if (tsqlCache.value.isValid()) mem.tsql = tsqlCache.value.value<toneInfo>().name;
-        cacheItem dtcsCache = queue->getCache(funcDTCSCode, 0);
+        cacheItem dtcsCache = queue->getCache(funcDTCSCode, memCacheRx(funcDTCSCode));
         if (dtcsCache.value.isValid()) {
             // Only a code the rig actually lists: the struct's own default is a
             // CTCSS value, and a memory carrying it is rejected outright.
@@ -2341,11 +2644,11 @@ void webServer::handleCommand(QWebSocket *client, const QJsonObject &cmd)
         }
         // The stored duplex is the low nibble of duplexMode_t (0 simplex,
         // 1 DUP-, 2 DUP+), not the 0x1x register value.
-        cacheItem dupCache = queue->getCache(funcDuplexMode, 0);
+        cacheItem dupCache = queue->getCache(funcDuplexMode, memCacheRx(funcDuplexMode));
         if (dupCache.value.isValid())
             mem.duplex = static_cast<quint8>(dupCache.value.value<duplexMode_t>()) & 0x0f;
         if (rigCaps->commands.contains(funcReadFreqOffset)) {
-            cacheItem offCache = queue->getCache(funcReadFreqOffset, 0);
+            cacheItem offCache = queue->getCache(funcReadFreqOffset, memCacheRx(funcReadFreqOffset));
             if (offCache.value.isValid()) mem.duplexOffset = offCache.value.value<freqt>();
         }
         // A channel that says "shift down" with no shift transmits on its own
@@ -2368,10 +2671,10 @@ void webServer::handleCommand(QWebSocket *client, const QJsonObject &cmd)
         // through the same sources buildStatusJson uses. In memory mode the
         // selected-freq cache carries the recalled channel's frequency, so a
         // write from MEM captures what you're actually listening to.
-        vfoCommandType tA = queue->getVfoCommand(vfoA, 0, false);
-        cacheItem freqCache = queue->getCache(tA.freqFunc, 0);
+        vfoCommandType tA = queue->getVfoCommand(vfoA, memRx, false);
+        cacheItem freqCache = queue->getCache(tA.freqFunc, tA.receiver);
         if (!freqCache.value.isValid()) freqCache = queue->getCache(funcSelectedFreq, 0);
-        if (!freqCache.value.isValid()) freqCache = queue->getCache(funcFreq, 0);
+        if (!freqCache.value.isValid()) freqCache = queue->getCache(funcFreq, memCacheRx(funcFreq));
         if (freqCache.value.isValid()) {
             mem.frequency = freqCache.value.value<freqt>();
         }
@@ -2386,9 +2689,9 @@ void webServer::handleCommand(QWebSocket *client, const QJsonObject &cmd)
             }
             return;
         }
-        cacheItem modeCache = queue->getCache(tA.modeFunc, 0);
+        cacheItem modeCache = queue->getCache(tA.modeFunc, tA.receiver);
         if (!modeCache.value.isValid()) modeCache = queue->getCache(funcSelectedMode, 0);
-        if (!modeCache.value.isValid()) modeCache = queue->getCache(funcMode, 0);
+        if (!modeCache.value.isValid()) modeCache = queue->getCache(funcMode, memCacheRx(funcMode));
         if (modeCache.value.isValid()) {
             modeInfo m = modeCache.value.value<modeInfo>();
             mem.mode = m.reg;
@@ -2410,7 +2713,7 @@ void webServer::handleCommand(QWebSocket *client, const QJsonObject &cmd)
         mem.dtcsB = mem.dtcs;
         mem.dtcspB = mem.dtcsp;
         mem.duplexB = mem.duplex;
-        queue->addUnique(priorityImmediate, queueItem(funcMemoryContents, QVariant::fromValue<memoryType>(mem), false, 0));
+        queue->add(priorityImmediate, queueItem(funcMemoryContents, QVariant::fromValue<memoryType>(mem), false, 0));
     }
     else if (type == "renameMemory") {
         // Rewrite an existing channel with a new name. The rest of the
@@ -2420,6 +2723,17 @@ void webServer::handleCommand(QWebSocket *client, const QJsonObject &cmd)
         int ch = cmd["channel"].toInt();
         int group = cmd.contains("group") ? cmd["group"].toInt() : 0;
         if (ch <= 0 && !(ch == 0 && rigCaps->memStart == 0)) return;
+        if (!memoryContentsSupported()) {
+            if (!memStore.rename(ch, cmd["name"].toString())) {
+                sendMemoryError(client, "Could not rename that memory");
+                return;
+            }
+            QJsonObject msg;
+            msg["type"] = "memoryChannel";
+            msg["memory"] = localMemoryToJson(memStore.get(ch));
+            sendJsonToAll(msg);
+            return;
+        }
         quint32 key = (quint32(group) << 16) | quint32(ch);
         auto it = memories.find(key);
         if (it == memories.end()) {
@@ -2433,7 +2747,7 @@ void webServer::handleCommand(QWebSocket *client, const QJsonObject &cmd)
         memcpy(mem.name, nb.constData(), size_t(nb.size()));
         mem.del = false;
         memories[key] = mem;
-        queue->addUnique(priorityImmediate, queueItem(funcMemoryContents, QVariant::fromValue<memoryType>(mem), false, 0));
+        queue->add(priorityImmediate, queueItem(funcMemoryContents, QVariant::fromValue<memoryType>(mem), false, 0));
         // Let every client refresh the row without a rescan
         QJsonObject memUpdate;
         memUpdate["type"] = "memoryChannel";
@@ -2445,6 +2759,20 @@ void webServer::handleCommand(QWebSocket *client, const QJsonObject &cmd)
         int ch = cmd["channel"].toInt();
         int group = cmd.contains("group") ? cmd["group"].toInt() : 0;
         if (ch <= 0) return;
+        if (!memoryContentsSupported()) {
+            memStore.remove(ch);
+            QJsonObject msg;
+            msg["type"] = "memoryChannel";
+            QJsonObject m;
+            m["channel"] = ch;
+            m["group"] = 0;
+            m["del"] = true;
+            m["local"] = true;
+            msg["memory"] = m;
+            sendJsonToAll(msg);
+            qCInfo(logWebServer) << "clearMemory (local): channel=" << ch;
+            return;
+        }
         // Write a deleted/empty memory via funcMemoryContents (same path as writeMemory)
         memoryType mem;
         mem.channel = ch;
@@ -2461,8 +2789,7 @@ void webServer::handleCommand(QWebSocket *client, const QJsonObject &cmd)
         memset(mem.R1B, 0, sizeof(mem.R1B));
         memset(mem.R2B, 0, sizeof(mem.R2B));
         qCInfo(logWebServer) << "clearMemory: channel=" << ch << "group=" << group;
-        memoryScanActive = false; // Prevent scan from interfering
-        queue->addUnique(priorityImmediate, queueItem(funcMemoryContents, QVariant::fromValue<memoryType>(mem), false, 0));
+        queue->add(priorityImmediate, queueItem(funcMemoryContents, QVariant::fromValue<memoryType>(mem), false, 0));
         quint32 key = (quint32(group) << 16) | ch;
         memories.remove(key);
     }
@@ -2820,9 +3147,13 @@ void webServer::handleCommand(QWebSocket *client, const QJsonObject &cmd)
             s->lastActivityMs = QDateTime::currentMSecsSinceEpoch();
             // Make sure we'll accept inbound to this own_call too.
             termEnsureRegistered(chan, own);
-            termAppendScrollback(s, termScrollbackEntry(QStringLiteral("info"),
-                QString("Connecting to %1...").arg(peer).toUtf8()));
-            termBroadcastSession(s);
+            {
+                QJsonObject e = termScrollbackEntry(QStringLiteral("info"),
+                    QString("Connecting to %1...").arg(peer).toUtf8());
+                termAppendScrollback(s, e);
+                termBroadcastSession(s);
+                termBroadcastData(s->sid, e);
+            }
             QMetaObject::invokeMethod(axProc, "connectRequest", Qt::QueuedConnection,
                                       Q_ARG(int, TERM_FIXED_CLIENT),
                                       Q_ARG(int, chan),
@@ -2844,10 +3175,14 @@ void webServer::handleCommand(QWebSocket *client, const QJsonObject &cmd)
             // fire server_link_terminated.  So re-issuing the same dlq event
             // here gets us instant tear-down for free.
             s->state = TerminalSession::Disconnecting;
-            termAppendScrollback(s, termScrollbackEntry(QStringLiteral("info"),
-                force ? QStringLiteral("Forcing disconnect...").toUtf8()
-                      : QStringLiteral("Disconnecting...").toUtf8()));
-            termBroadcastSession(s);
+            {
+                QJsonObject e = termScrollbackEntry(QStringLiteral("info"),
+                    force ? QStringLiteral("Forcing disconnect...").toUtf8()
+                          : QStringLiteral("Disconnecting...").toUtf8());
+                termAppendScrollback(s, e);
+                termBroadcastSession(s);
+                termBroadcastData(s->sid, e);
+            }
             QMetaObject::invokeMethod(axProc, "disconnectRequest", Qt::QueuedConnection,
                                       Q_ARG(int, TERM_FIXED_CLIENT),
                                       Q_ARG(int, s->chan),
@@ -2961,8 +3296,9 @@ void webServer::handleCommand(QWebSocket *client, const QJsonObject &cmd)
         }
     }
     else if (type == "setReporter") {
-        reporterCallsign = cmd["callsign"].toString().toUpper().trimmed();
-        reporterGrid = cmd["grid"].toString().toUpper().trimmed();
+        // Only the on/off flags: the station callsign and grid are server
+        // state (see applyStationCallsign), not something each browser
+        // re-asserts.
         // "enabled" is the legacy field (FreeDV reporter); "freedvEnabled"
         // is the explicit name now that PSK Reporter is also configured here.
         reporterEnabled = cmd.contains("freedvEnabled")
@@ -3039,31 +3375,11 @@ void webServer::handleCommand(QWebSocket *client, const QJsonObject &cmd)
         notifyPskReporterStatus();
     }
     else if (type == "setStationCallsign") {
-        // Lightweight callsign push: caches the call (and grid) for the
-        // FreeDV reporter and pushes it to the RADE EOO encoder. Unlike
-        // setReporter, it does NOT toggle the FreeDV/PSK reporter on/off,
-        // so the browser can call it on tab load (when the DIGI checkbox
-        // state hasn't been restored yet) without disconnecting an active
-        // reporter.
-        //
-        // An empty callsign clears the cached value — important so a fresh
-        // browser session with no saved call doesn't inherit stale state
-        // from whoever last connected to this daemon (e.g. a developer's
-        // debug tab).  In multi-tab setups the most-recent client wins.
-        QString call = cmd["callsign"].toString().toUpper().trimmed();
-        QString grid = cmd["grid"].toString().toUpper().trimmed();
-        reporterCallsign = call;
-        if (!grid.isEmpty()) reporterGrid = grid;
-        qInfo() << "Web: setStationCallsign"
-                << (reporterCallsign.isEmpty() ? QStringLiteral("<cleared>") : reporterCallsign)
-                << reporterGrid;
-        if (radeProcessor) {
-            QMetaObject::invokeMethod(radeProcessor, "setTxCallsign",
-                                      Qt::QueuedConnection,
-                                      Q_ARG(QString, reporterCallsign));
-        }
-        if (freedvReporter) freedvReporter->setStation(reporterCallsign, reporterGrid);
-        if (pskReporter)    pskReporter->setStation(reporterCallsign, reporterGrid);
+        // A browser changed the station callsign (or grid) in one of its
+        // panels.  Persist it and push it to every other browser; an empty
+        // grid leaves the stored one alone (a panel without the grid input
+        // in view sends none).
+        applyStationCallsign(cmd["callsign"].toString(), cmd["grid"].toString(), true);
     }
     else if (type == "setDigiActive") {
         // Browser opens / closes the FT8/FT4 panel.  PSK Reporter only
@@ -3099,6 +3415,7 @@ void webServer::handleCommand(QWebSocket *client, const QJsonObject &cmd)
             if (freqHz > 0) pskReporter->updateFrequency(freqHz);
             pskReporter->updateRxSpotWithGrid(call, grid, mode, snr);
         }
+        if (wsjtxEnabled_ && wsjtxDecodes_) wsjtxSendDecode(cmd);
     }
     else {
         qWarning() << "Web: Unknown command:" << type;
@@ -3112,6 +3429,12 @@ void webServer::handleCommand(QWebSocket *client, const QJsonObject &cmd)
 QJsonObject webServer::buildInfoJson() const
 {
     QJsonObject info;
+    // Where the station log lives, so scripts (and the test suite on any
+    // platform) can find the file without guessing the data directory.
+    info["logbookPath"] = logbook_.path();
+    info["logbookPersistent"] = logbookPersistent_;
+    info["stationCallsign"] = reporterCallsign;
+    info["stationGrid"] = reporterGrid;
     info["version"] = QString(WFWEB_VERSION);
     // Instance tag from --name; empty means "show the rig model".
     info["name"] = instanceName_;
@@ -3173,6 +3496,23 @@ QJsonObject webServer::buildInfoJson() const
             }
             info["spans"] = spans;
         }
+        if (!rigCaps->scopeModes.empty()) {
+            // The rig's scope modes (Center / Fixed / Scroll-C / Scroll-F) as the
+            // rig file lists them; the browser picks which keys to show.
+            QJsonArray scopeModes;
+            for (const genericType &m : rigCaps->scopeModes) {
+                if (m.num > 3) continue;
+                QJsonObject sm;
+                sm["num"] = (int)m.num;
+                sm["name"] = m.name;
+                scopeModes.append(sm);
+            }
+            info["scopeModes"] = scopeModes;
+        }
+        // The browser may set the Fixed-mode window (setScopeEdges) only when the
+        // rig file carries the 0x27 0x1E range table and both edge commands.
+        info["scopeFixedEdges"] = !rigCaps->scopeEdgeRanges.empty() &&
+            rigCaps->commands.contains(funcScopeFixedEdgeFreq) && rigCaps->commands.contains(funcScopeEdge);
         if (!rigCaps->preamps.empty()) {
             QJsonArray preamps;
             for (const genericType &p : rigCaps->preamps) {
@@ -3224,7 +3564,9 @@ QJsonObject webServer::buildInfoJson() const
         }
         info["memGroups"] = rigCaps->memGroups;
         info["memStart"] = rigCaps->memStart;
-        info["hasMemoryMode"] = rigCaps->commands.contains(funcMemoryMode);
+        info["hasMemoryMode"] = rigCaps->commands.contains(funcMemoryMode)
+                             && memoryContentsSupported();
+        info["memoriesLocal"] = !memoryContentsSupported();
     } else {
         info["connected"] = false;
     }
@@ -3250,7 +3592,18 @@ void webServer::sendCurrentState(QWebSocket *client)
     if (!audioConfigured && !audioErrorReason.isEmpty()) {
         info["audioError"] = audioErrorReason;
     }
+    info["remoteLogEnabled"] = wsjtxEnabled_;
+    info["remoteLogTarget"] = wsjtxTarget_;
+    info["remoteLogDecodes"] = wsjtxDecodes_;
+    info["logbookPath"] = logbook_.path();
+    info["logbookCount"] = logbook_.count();
+    info["logbookPersistent"] = logbookPersistent_;
+    // The browser adopts these on connect instead of pushing its own copy.
+    info["stationCallsign"] = reporterCallsign;
+    info["stationGrid"] = reporterGrid;
     sendJsonTo(client, info);
+    // The log itself is paged over REST; this only tells the browser to fetch page 1.
+    sendJsonTo(client, logbookSummary());
 
     // Send current status
     if (rigCaps) {
@@ -3290,16 +3643,20 @@ QJsonObject webServer::buildStatusJson()
     // (IC-7300 etc) funcSelectedFreq/funcUnselectedFreq are keyed by which
     // VFO is currently selected on the radio, NOT by the literal A/B labels —
     // so we have to consult rigState.vfo to map them back to A/B.
+    // In memory mode those caches hold the recalled channel (both of them on
+    // an IC-7300), so the VFO slots are left alone: the browser keeps the
+    // values from before the recall and shows "frequency" instead (#108).
     bool cmd29 = rigCaps && rigCaps->hasCommand29;
+    bool inMem = (queue->getState().vfo == vfoMem);
     if (cmd29) {
         vfoCommandType tA = queue->getVfoCommand(vfoA, 0, false);
         cacheItem freqCacheA = queue->getCache(tA.freqFunc, 0);
-        if (freqCacheA.value.isValid()) {
+        if (freqCacheA.value.isValid() && !inMem) {
             status["vfoAFrequency"] = freqJson(freqCacheA.value.value<freqt>());
         }
         vfoCommandType tB = queue->getVfoCommand(vfoB, 1, false);
         cacheItem freqCacheB = queue->getCache(tB.freqFunc, 1);
-        if (freqCacheB.value.isValid()) {
+        if (freqCacheB.value.isValid() && !inMem) {
             status["vfoBFrequency"] = freqJson(freqCacheB.value.value<freqt>());
         }
         status["selectedVfo"] = (queue->getState().vfo == vfoMem) ? "MEM"
@@ -3309,10 +3666,10 @@ QJsonObject webServer::buildStatusJson()
         cacheItem selCache = queue->getCache(funcSelectedFreq, 0);
         cacheItem unselCache = queue->getCache(funcUnselectedFreq, 0);
         if (!selCache.value.isValid()) selCache = freqCache; // fall back to plain funcFreq
-        if (selCache.value.isValid()) {
+        if (selCache.value.isValid() && !inMem) {
             status[bSelected ? "vfoBFrequency" : "vfoAFrequency"] = freqJson(selCache.value.value<freqt>());
         }
-        if (unselCache.value.isValid()) {
+        if (unselCache.value.isValid() && !inMem) {
             status[bSelected ? "vfoAFrequency" : "vfoBFrequency"] = freqJson(unselCache.value.value<freqt>());
         }
         status["selectedVfo"] = (queue->getState().vfo == vfoMem) ? "MEM"
@@ -3518,6 +3875,9 @@ QJsonObject webServer::buildStatusJson()
             }
         }
     }
+    cacheItem scopeModeCache = queue->getCache(funcScopeMode, 0);
+    if (scopeModeCache.value.isValid())
+        status["scopeMode"] = (int)scopeModeCache.value.value<uchar>();
 
     return status;
 }
@@ -3575,14 +3935,19 @@ void webServer::receiveCache(cacheItem item)
         freqt f = item.value.value<freqt>();
         QJsonValue hz = freqJson(f);
         bool cmd29 = rigCaps && rigCaps->hasCommand29;
-        bool isActive;
-        if (cmd29) {
+        bool isActive = cmd29 ? (item.receiver == activeReceiver) : true;
+        if (memModeLocal) {
+            // Memory mode: the operating band reports the recalled channel,
+            // which belongs to neither VFO slot, and the other band's read
+            // answers with the channel too (IC-7300, measured) so it says
+            // nothing about that VFO. Only the operating frequency goes out;
+            // the VFO slots keep what they held before the recall (#108).
+            if (!isActive) return;
+        } else if (cmd29) {
             update[item.receiver == 1 ? "vfoBFrequency" : "vfoAFrequency"] = hz;
-            isActive = (item.receiver == activeReceiver);
         } else {
             bool activeIsB = (activeVfoLocal == vfoB);
             update[activeIsB ? "vfoBFrequency" : "vfoAFrequency"] = hz;
-            isActive = true;
         }
         if (isActive) {
             update["frequency"] = hz;
@@ -3597,6 +3962,7 @@ void webServer::receiveCache(cacheItem item)
         // Non-cmd29 rigs report the inactive VFO's freq via this func.
         // cmd29 rigs use receiver-indexed funcFreq, handled above.
         if (rigCaps && rigCaps->hasCommand29) return;
+        if (memModeLocal) return; // echoes the recalled channel, see funcFreq
         freqt f = item.value.value<freqt>();
         bool activeIsB = (activeVfoLocal == vfoB);
         update[activeIsB ? "vfoAFrequency" : "vfoBFrequency"] = freqJson(f);
@@ -3610,10 +3976,12 @@ void webServer::receiveCache(cacheItem item)
             // Memory mode: report it, but keep activeVfoLocal pointing at the
             // last real VFO so command targeting (and a later switch back to
             // VFO mode) still lands on it.
+            memModeLocal = true;
             update["selectedVfo"] = "MEM";
             break;
         }
         bool isB = (v == vfoB || v == vfoSub);
+        memModeLocal = false;
         activeVfoLocal = v;
         activeReceiver = isB ? 1 : 0;
         update["selectedVfo"] = isB ? "B" : "A";
@@ -3634,12 +4002,14 @@ void webServer::receiveCache(cacheItem item)
     case funcVFOMainSelect:
         activeVfoLocal = (rigCaps && rigCaps->hasCommand29) ? vfoMain : vfoA;
         activeReceiver = 0;
+        memModeLocal = false;
         update["selectedVfo"] = "A";
         break;
     case funcVFOBSelect:
     case funcVFOSubSelect:
         activeVfoLocal = (rigCaps && rigCaps->hasCommand29) ? vfoSub : vfoB;
         activeReceiver = 1;
+        memModeLocal = false;
         update["selectedVfo"] = "B";
         break;
     case funcMode:
@@ -3714,12 +4084,14 @@ void webServer::receiveCache(cacheItem item)
         scopeData sd = item.value.value<scopeData>();
         if (!sd.valid || sd.data.isEmpty()) return;
 
-        // Binary format: [msgType(1)] [reserved(1)] [padding(2)] [startFreq float32(4)] [endFreq float32(4)] [data(N)]
+        // Binary format: [msgType(1)] [scopeMode(1)] [outOfRange(1)] [padding(1)] [startFreq float32(4)] [endFreq float32(4)] [data(N)]
+        // scopeMode: 0 Center, 1 Fixed, 2 Scroll-C, 3 Scroll-F (rig 0x27 0x14).
+        // outOfRange: 1 when the VFO is outside a Fixed window; data is then all zero.
         QByteArray msg;
         msg.resize(12 + sd.data.size());
         msg[0] = 0x01;  // msgType: spectrum data
-        msg[1] = 0;     // reserved
-        msg[2] = 0;     // padding
+        msg[1] = static_cast<char>(sd.mode);
+        msg[2] = sd.oor ? 1 : 0;
         msg[3] = 0;     // padding
 
         float startF = static_cast<float>(sd.startFreq);
@@ -3819,6 +4191,11 @@ void webServer::receiveCache(cacheItem item)
         }
         break;
     }
+    case funcScopeMode:
+        // Polled and read back after every set, so a change made on the rig's
+        // own MENU reaches the browser between spectrum frames.
+        update["scopeMode"] = (int)item.value.value<uchar>();
+        break;
     case funcPowerControl:
         rigPoweredOn = item.value.toBool();
         update["powerState"] = rigPoweredOn;
@@ -3832,29 +4209,36 @@ void webServer::receiveCache(cacheItem item)
         }
         memoryType mem = item.value.value<memoryType>();
         quint32 key = (quint32(mem.group) << 16) | mem.channel;
-        if (mem.del || (mem.frequency.Hz == 0 && mem.mode == 0)) {
+        bool empty = mem.del || (mem.frequency.Hz == 0 && mem.mode == 0);
+        if (empty) {
             memories.remove(key);
         } else {
             memories[key] = mem;
         }
+        // Anything the running scan hears about its group survives the
+        // reconcile at scan end — including a channel saved or renamed while
+        // the scan was already past it (the write echoes back through the
+        // cache with the contents we sent).
+        if (memoryScanActive && !mem.del && int(mem.group) == memoryScanGroup)
+            memoryScanSeen.insert(key);
         // A reply belongs to the running scan only if it matches the group and
         // channel we are waiting on; a late reply from before a scan restart
         // (e.g. a group switch) must not stop the timer or advance the counter.
-        bool scanReply = memoryScanActive
+        // Our own clear echoes back as a deleted entry and says nothing about
+        // what the rig holds, so it neither stops the timer nor advances the
+        // scan: the rig's own reply, or the 500 ms timeout, does that.
+        bool scanReply = memoryScanActive && !mem.del
                 && int(mem.group) == memoryScanGroup
                 && int(mem.channel) == memoryScanCurrent;
         if (scanReply && memoryScanTimer) memoryScanTimer->stop();
         // Broadcast to clients (only non-empty channels)
-        if (!mem.del && (mem.frequency.Hz != 0 || mem.mode != 0)) {
+        if (!empty) {
             QJsonObject memUpdate;
             memUpdate["type"] = "memoryChannel";
             memUpdate["memory"] = memoryToJson(mem);
             sendJsonToAll(memUpdate);
         }
-        // Continue scan if active (but not for our own write/delete echoed back)
-        if (scanReply && !mem.del) {
-            scanNextMemory();
-        }
+        if (scanReply) scanNextMemory();
         return; // Don't send as generic update
     }
     default:
@@ -3876,6 +4260,7 @@ void webServer::sendPeriodicStatus()
     // because buildStatusJson() reads rigState.vfo directly on every tick.
     if (queue) {
         vfo_t qv = queue->getState().vfo;
+        memModeLocal = (qv == vfoMem);
         if (qv != vfoUnknown && qv != vfoMem && qv != activeVfoLocal) {
             activeVfoLocal = qv;
             activeReceiver = (qv == vfoB || qv == vfoSub) ? 1 : 0;
@@ -4064,7 +4449,7 @@ modeInfo webServer::stringToMode(const QString &mode)
 
 // --- Memory Channels ---
 
-QString webServer::modeRegToString(quint8 reg)
+QString webServer::modeRegToString(quint8 reg) const
 {
     if (rigCaps) {
         for (const modeInfo &mi : rigCaps->modes) {
@@ -4116,6 +4501,14 @@ void webServer::scanNextMemory()
         if (memoryScanTimer) memoryScanTimer->stop();
         QJsonObject done;
         done["type"] = "memoryScanComplete";
+        // Channels of this group the scan did not report were cleared on the
+        // radio, or a write never landed: drop them now the picture is complete.
+        for (auto it = memories.begin(); it != memories.end(); ) {
+            if (int(it.key() >> 16) == memoryScanGroup && !memoryScanSeen.contains(it.key()))
+                it = memories.erase(it);
+            else
+                ++it;
+        }
         // Count only the scanned group — a late reply from a previous scan
         // may have parked an entry under another group's key.
         int count = 0;
@@ -4127,8 +4520,167 @@ void webServer::scanNextMemory()
         return;
     }
     uint val = (uint(memoryScanGroup) << 16) | uint(memoryScanCurrent);
-    queue->addUnique(priorityImmediate, queueItem(funcMemoryContents, QVariant::fromValue<uint>(val), false, 0));
+    // add(), not addUnique(): see the getMemories handler.
+    queue->add(priorityImmediate, queueItem(funcMemoryContents, QVariant::fromValue<uint>(val), false, 0));
     if (memoryScanTimer) memoryScanTimer->start();
+}
+
+// Can this rig report a memory channel's *contents*? Two halves, and both
+// matter (issue #114):
+//
+//   - funcMemoryContents (CI-V 1A 00 on Icom) is the command that reads a
+//     channel back. The IC-718 and the IC-706 family predate it entirely —
+//     they can select, write and clear a channel, but never say what is in
+//     one, so there is nothing to build a list from.
+//   - memParser is the byte layout that command's payload uses, taken from
+//     the rig file's MemFormat. The IC-746 / IC-756PRO family declare the
+//     command but ship an empty MemFormat, and serializing a memoryType
+//     against an empty parser appends no bytes at all — putting a payload-less
+//     "1A 00" on the wire, which the radio answers with NG.
+//
+// Every entry point that reads or writes channel contents gates on this.
+// Channel *select* (funcMemoryMode / funcMemorySelect) is a separate
+// capability and is checked where it is used, in recallMemoryOnRig().
+bool webServer::memoryContentsSupported() const
+{
+    return rigCaps && rigCaps->commands.contains(funcMemoryContents)
+        && !rigCaps->memParser.isEmpty();
+}
+
+// Report a failed memory action back to the client that asked for it. Before
+// this, the unsupported-rig paths in handleCommand() simply returned, leaving
+// the browser's Save / rename / clear looking like they had worked.
+void webServer::sendMemoryError(QWebSocket *client, const QString &error)
+{
+    QJsonObject obj;
+    obj["type"] = "memoryError";
+    obj["error"] = error;
+    sendJsonTo(client, obj);
+}
+
+// Put a stored frequency + mode onto the VFO. This is all a memory recall can
+// be when the channel's contents live outside the radio (local memories) or
+// when the rig has no channel-select command at all — no tone, no duplex, no
+// split, because neither source carries them.
+void webServer::applyMemoryToVfo(qint64 hz, quint8 modeReg, quint8 filter, quint8 datamode)
+{
+    if (!queue || !rigCaps) return;
+    const uchar rx = rigCaps->hasCommand29
+                   ? (queue->getState().vfo == vfoSub ? 1 : 0) : 0;
+    const vfoCommandType t = queue->getVfoCommand(vfoA, rx, true);
+    if (hz > 0) {
+        freqt f;
+        f.Hz = hz;
+        f.MHzDouble = hz / 1.0E6;
+        f.VFO = activeVFO;
+        queue->addUnique(priorityImmediate, queueItem(t.freqFunc, QVariant::fromValue<freqt>(f), false, t.receiver));
+    }
+    for (const modeInfo &mi : rigCaps->modes) {
+        if (mi.reg == modeReg) {
+            modeInfo m = mi;
+            m.filter = filter > 0 ? filter : 1;
+            m.data = datamode;
+            queue->addUnique(priorityImmediate, queueItem(t.modeFunc, QVariant::fromValue<modeInfo>(m), false, t.receiver));
+            break;
+        }
+    }
+    requestVfoUpdate();
+}
+
+// Local channels reach the browser as the same "memoryChannel" records the rig
+// path sends, so the panel renders both without knowing which it is looking at.
+// The fields a local channel cannot carry are simply left out.
+QJsonObject webServer::localMemoryToJson(const localMemory &m) const
+{
+    QJsonObject o;
+    o["group"] = 0;
+    o["channel"] = m.channel;
+    o["frequency"] = m.frequency;
+    o["mode"] = modeRegToString(m.modeReg);
+    o["modeReg"] = m.modeReg;
+    o["filter"] = m.filter;
+    o["name"] = m.name;
+    o["local"] = true;
+    o["del"] = false;
+    if (m.frequency == 0) o["empty"] = true;
+    return o;
+}
+
+// The local answer to "getMemories". No scan and no timer — the list is
+// already in memory, so every channel goes out at once.
+void webServer::sendLocalMemories(QWebSocket *client)
+{
+    const QList<localMemory> list = memStore.all();
+    for (const localMemory &m : list) {
+        QJsonObject msg;
+        msg["type"] = "memoryChannel";
+        msg["memory"] = localMemoryToJson(m);
+        sendJsonTo(client, msg);
+    }
+    QJsonObject done;
+    done["type"] = "memoryScanComplete";
+    done["count"] = list.size();
+    done["local"] = true;
+    sendJsonTo(client, done);
+}
+
+// Store what the radio is on right now as local channel `channel`.
+bool webServer::writeLocalMemory(int channel, const QString &name, QString *error)
+{
+    if (!queue) {
+        if (error) *error = "Rig not connected";
+        return false;
+    }
+    localMemory m;
+    m.channel = channel;
+    m.name = name;
+
+    // Same cache fallback chain the rig write path uses: rigs differ in which
+    // cache the periodic poll fills, and the IC-718 class fills only funcFreq.
+    const vfoCommandType tA = queue->getVfoCommand(vfoA, 0, false);
+    cacheItem freqCache = queue->getCache(tA.freqFunc, 0);
+    if (!freqCache.value.isValid()) freqCache = queue->getCache(funcSelectedFreq, 0);
+    if (!freqCache.value.isValid()) freqCache = queue->getCache(funcFreq, 0);
+    if (freqCache.value.isValid()) m.frequency = qint64(freqCache.value.value<freqt>().Hz);
+    // Refuse a channel with no frequency rather than storing a 0 Hz entry the
+    // user would have to notice and delete. Same guard the rig path uses.
+    if (m.frequency <= 0) {
+        if (error) *error = "No frequency to store yet";
+        return false;
+    }
+    cacheItem modeCache = queue->getCache(tA.modeFunc, 0);
+    if (!modeCache.value.isValid()) modeCache = queue->getCache(funcSelectedMode, 0);
+    if (!modeCache.value.isValid()) modeCache = queue->getCache(funcMode, 0);
+    if (modeCache.value.isValid()) {
+        const modeInfo mi = modeCache.value.value<modeInfo>();
+        m.modeReg = quint8(mi.reg);
+        m.filter = quint8(mi.filter > 0 ? mi.filter : 1);
+    }
+    if (!memStore.set(m)) {
+        if (error) *error = "Could not save the memory file";
+        return false;
+    }
+    // Everyone watching gets the new row without a rescan.
+    QJsonObject msg;
+    msg["type"] = "memoryChannel";
+    msg["memory"] = localMemoryToJson(m);
+    sendJsonToAll(msg);
+    return true;
+}
+
+// Recall a local channel: tune the VFO, nothing else. Deliberately does NOT
+// touch the rig's own memory mode — on a radio like the IC-718 the CI-V 08
+// select would jump to *its* channel N, which has nothing to do with the entry
+// wfweb is storing under that number.
+bool webServer::recallLocalMemory(int channel, QString *error)
+{
+    if (!memStore.contains(channel)) {
+        if (error) *error = "No such memory channel";
+        return false;
+    }
+    const localMemory m = memStore.get(channel);
+    applyMemoryToVfo(m.frequency, m.modeReg, m.filter, 0);
+    return true;
 }
 
 // Recall a stored channel *on the radio* (issue #92) so the rig itself
@@ -4170,24 +4722,7 @@ bool webServer::recallMemoryOnRig(int channel, int group, QString *error)
             return false;
         }
         const memoryType &mem = it.value();
-        vfoCommandType t = queue->getVfoCommand(vfoA, rx, true);
-        if (mem.frequency.Hz > 0) {
-            freqt f;
-            f.Hz = mem.frequency.Hz;
-            f.MHzDouble = mem.frequency.Hz / 1.0E6;
-            f.VFO = activeVFO;
-            queue->addUnique(priorityImmediate, queueItem(t.freqFunc, QVariant::fromValue<freqt>(f), false, t.receiver));
-        }
-        for (const modeInfo &mi : rigCaps->modes) {
-            if (mi.reg == mem.mode) {
-                modeInfo m = mi;
-                m.filter = mem.filter > 0 ? mem.filter : 1;
-                m.data = mem.datamode;
-                queue->addUnique(priorityImmediate, queueItem(t.modeFunc, QVariant::fromValue<modeInfo>(m), false, t.receiver));
-                break;
-            }
-        }
-        requestVfoUpdate();
+        applyMemoryToVfo(qint64(mem.frequency.Hz), mem.mode, mem.filter, mem.datamode);
         return true;
     }
 
@@ -5662,9 +6197,281 @@ void webServer::setSettingsFile(const QString &path)
     packetSettingsFile_ = path;
 }
 
+std::unique_ptr<QSettings> webServer::openSettings() const
+{
+    return std::unique_ptr<QSettings>(packetSettingsFile_.isEmpty()
+        ? new QSettings()
+        : new QSettings(packetSettingsFile_, QSettings::IniFormat));
+}
+
+void webServer::applyStationCallsign(const QString &callIn, const QString &gridIn, bool persist)
+{
+    const QString call = callIn.toUpper().trimmed();
+    const QString grid = gridIn.toUpper().trimmed();
+    const bool changed = call != reporterCallsign || (!grid.isEmpty() && grid != reporterGrid);
+    reporterCallsign = call;
+    if (!grid.isEmpty()) reporterGrid = grid;
+    if (persist) {
+        auto settings = openSettings();
+        settings->setValue("Station/Callsign", reporterCallsign);
+        settings->setValue("Station/Grid", reporterGrid);
+    }
+    qInfo().noquote() << "Station:" << (reporterCallsign.isEmpty() ? QStringLiteral("<no callsign>") : reporterCallsign)
+                      << reporterGrid << (persist ? "(saved)" : "(from settings)");
+    if (radeProcessor)
+        QMetaObject::invokeMethod(radeProcessor, "setTxCallsign", Qt::QueuedConnection,
+                                  Q_ARG(QString, reporterCallsign));
+    if (freedvReporter) freedvReporter->setStation(reporterCallsign, reporterGrid);
+    if (pskReporter)    pskReporter->setStation(reporterCallsign, reporterGrid);
+    if (changed)
+        sendJsonToAll(QJsonObject{{"type", "stationChanged"}, {"callsign", reporterCallsign}, {"grid", reporterGrid}});
+}
+
+void webServer::configureLogbook(const QString &logbookOverride,
+                                 const QString &remoteLogOverride,
+                                 bool noRemoteLog, bool remoteLogDecodes)
+{
+    auto settings = openSettings();
+
+    // Station identity first: the logbook and the remote logger both stamp
+    // QSOs with it.
+    applyStationCallsign(settings->value("Station/Callsign").toString(),
+                         settings->value("Station/Grid").toString(), false);
+
+    // --logbook wins over Logbook= in the settings file.  A relative path in
+    // a named profile resolves next to that profile, so contest.conf can
+    // carry its own contest.adi.
+    QString path = logbookOverride.isEmpty() ? settings->value("Logbook").toString()
+                                             : logbookOverride;
+    if (path.isEmpty())
+        path = QDir(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation))
+                   .filePath(QStringLiteral("logbook.adi"));
+    else if (QFileInfo(path).isRelative() && !packetSettingsFile_.isEmpty())
+        path = QFileInfo(packetSettingsFile_).dir().filePath(path);
+    path = QDir::cleanPath(path);
+
+    if (logbook_.open(path))
+        qInfo().noquote() << "Logbook:" << path << QString("(%1 QSOs)").arg(logbook_.count());
+    else
+        qWarning().noquote() << "Logbook: cannot open or create" << path << "- QSOs will not be saved";
+
+    // A container without a volume keeps the file only as long as the
+    // container lives, and since browsers now hand their log to the server
+    // that would be silent data loss for anyone upgrading a `docker run`
+    // without a -v.  Detection lives in Logbook::isPersistentLocation (see
+    // the block comment there for how and its limits); here we log it and
+    // pass `persistent` to every browser, which keeps its own copy of what
+    // it logs while this is false (SPA: logbookPersistent).
+    logbookPersistent_ = Logbook::isPersistentLocation(QFileInfo(path).absolutePath());
+    if (!logbookPersistent_)
+        qWarning().noquote() << "Logbook: NOT PERSISTENT -" << path
+                             << "is inside the container's own filesystem and will be lost when the"
+                             << "container is recreated. Mount a volume at /data (see DOCKER.md).";
+
+    // Remote logging is a server-side setting only ([RemoteLog] in the
+    // settings file, --remote-log on the command line): where the station's
+    // QSO stream goes is deployment configuration, and the browser has no
+    // login, so it only gets to see the state (rigInfo.remoteLog*).
+    // --remote-log implies enable, --no-remote-log wins (same rules as
+    // rigctld).  The WSJTX/* keys are read as a fallback for the dev builds
+    // that briefly used them.
+    const auto setting = [&settings](const char *key, const QVariant &def) {
+        const QVariant v = settings->value(QString("RemoteLog/") + key);
+        return v.isValid() ? v : settings->value(QString("WSJTX/") + key, def);
+    };
+    wsjtxDecodes_ = remoteLogDecodes || setting("Decodes", false).toBool();
+    wsjtxTarget_ = remoteLogOverride.isEmpty() ? setting("Target", QString()).toString()
+                                               : remoteLogOverride;
+    const bool enabled = !remoteLogOverride.isEmpty() || setting("Enabled", false).toBool();
+    if (noRemoteLog || !enabled || wsjtxTarget_.isEmpty())
+        qInfo() << "Remote log: disabled";
+    else if (configureWsjtxTarget(wsjtxTarget_))
+        qInfo().noquote() << "Remote log: sending QSOs to" << wsjtxAddress_.toString() + ':' + QString::number(wsjtxPort_)
+                          << "as" << wsjtxId_ << (wsjtxDecodes_ ? "(WSJT-X UDP protocol, with decodes)" : "(WSJT-X UDP protocol)");
+    else
+        qWarning() << "Remote log: cannot resolve target" << wsjtxTarget_;
+}
+
+// --- Logbook mutations: file, then WebSocket delta, then WSJT-X ---
+// Every browser applies the delta to whatever page it has loaded; nobody
+// ever receives the whole log.
+
+QJsonObject webServer::logbookSummary() const
+{
+    return QJsonObject{{"type", "logbook"}, {"count", logbook_.count()},
+                       {"unexported", logbook_.unexportedCount()}, {"persistent", logbookPersistent_}};
+}
+
+bool webServer::logbookAdd(QsoRecord &r)
+{
+    if (r.isValid() && r.stationCall.isEmpty()) r.stationCall = reporterCallsign;
+    if (!r.isValid() || !logbook_.add(r)) return false;
+    sendJsonToAll(QJsonObject{{"type", "qsoAdded"}, {"qso", r.toJson()}, {"count", logbook_.count()},
+                              {"unexported", logbook_.unexportedCount()}});
+    wsjtxSendQso(r);
+    return true;
+}
+
+bool webServer::logbookUpdate(const QString &id, const QsoRecord &r)
+{
+    if (!logbook_.update(id, r)) return false;
+    sendJsonToAll(QJsonObject{{"type", "qsoUpdated"}, {"qso", logbook_.find(id)->toJson()}});
+    return true;
+}
+
+bool webServer::logbookRemove(const QString &id)
+{
+    if (!logbook_.remove(id)) return false;
+    sendJsonToAll(QJsonObject{{"type", "qsoDeleted"}, {"id", id}, {"count", logbook_.count()},
+                              {"unexported", logbook_.unexportedCount()}});
+    return true;
+}
+
+// Whole-log change (clear, merge, import): browsers reload their first page.
+void webServer::logbookReset()
+{
+    sendJsonToAll(logbookSummary());
+}
+
+bool webServer::logbookClear(const char *who)
+{
+    QString backup;
+    if (!logbook_.clear(&backup)) {
+        qWarning() << "Logbook: clear failed (" << who << ")";
+        return false;
+    }
+    if (backup.isEmpty()) qInfo().noquote() << "Logbook: cleared (" << who << "), it was already empty";
+    else qInfo().noquote() << "Logbook: cleared (" << who << "), previous file kept as" << backup;
+    logbookReset();
+    return true;
+}
+
+// --- WSJT-X UDP emitter ---
+
+bool webServer::configureWsjtxTarget(const QString &target)
+{
+    QString host = target.trimmed();
+    quint16 port = 2237;
+    const int colon = host.lastIndexOf(':');
+    // host:port — but leave a bare IPv6 literal alone
+    if (colon > 0 && !host.mid(colon + 1).contains(':')) {
+        bool ok = false;
+        const int p = host.mid(colon + 1).toInt(&ok);
+        if (ok && p > 0 && p < 65536) {
+            port = quint16(p);
+            host = host.left(colon);
+        }
+    }
+    QHostAddress address;
+    if (!address.setAddress(host)) {
+        const auto found = QHostInfo::fromName(host).addresses();
+        if (found.isEmpty()) return false;
+        address = found.first();
+    }
+    wsjtxAddress_ = address;
+    wsjtxPort_ = port;
+    wsjtxEnabled_ = true;
+    if (!wsjtxSocket_) wsjtxSocket_ = new QUdpSocket(this);
+    if (!wsjtxHeartbeatTimer_) {
+        wsjtxHeartbeatTimer_ = new QTimer(this);
+        connect(wsjtxHeartbeatTimer_, &QTimer::timeout, this, &webServer::wsjtxSendHeartbeat);
+    }
+    // Listeners (JTAlert, GridTracker) drop a client whose heartbeats stop.
+    wsjtxHeartbeatTimer_->start(15000);
+    wsjtxSendHeartbeat();
+    return true;
+}
+
+void webServer::wsjtxSendDatagram(const QByteArray &packet)
+{
+    if (!wsjtxEnabled_ || !wsjtxSocket_) return;
+    wsjtxSocket_->writeDatagram(packet, wsjtxAddress_, wsjtxPort_);
+}
+
+void webServer::wsjtxSendHeartbeat()
+{
+    wsjtxSendDatagram(WsjtxMessage::heartbeat(wsjtxId_, WsjtxMessage::Schema,
+                                              QString(WFWEB_VERSION), QString()));
+    wsjtxSendStatus();
+}
+
+void webServer::wsjtxSendStatus()
+{
+    WsjtxMessage::StatusFields status;
+    if (queue && rigCaps) {
+        const vfoCommandType v = queue->getVfoCommand(vfoA, 0, false);
+        const cacheItem fc = queue->getCache(v.freqFunc, v.receiver);
+        if (fc.value.isValid()) status.dialFrequency = fc.value.value<freqt>().Hz;
+        const cacheItem mc = queue->getCache(v.modeFunc, v.receiver);
+        if (mc.value.isValid()) status.mode = modeToString(mc.value.value<modeInfo>());
+    }
+    if (digiActive && (digiMode == QLatin1String("FT8") || digiMode == QLatin1String("FT4")))
+        status.mode = digiMode;
+    status.txMode = status.mode;
+    status.deCall = reporterCallsign;
+    status.deGrid = reporterGrid;
+    wsjtxSendDatagram(WsjtxMessage::status(wsjtxId_, status));
+}
+
+void webServer::wsjtxSendClose()
+{
+    if (wsjtxEnabled_) wsjtxSendDatagram(WsjtxMessage::close(wsjtxId_));
+}
+
+void webServer::wsjtxSendQso(const QsoRecord &q)
+{
+    if (!wsjtxEnabled_) return;
+    wsjtxSendStatus();
+    QDateTime when(QDate::fromString(q.date, "yyyyMMdd"), QTime::fromString(q.time, "hhmmss"), Qt::UTC);
+    if (!when.isValid()) when = QDateTime::currentDateTimeUtc();
+
+    WsjtxMessage::QsoFields f;
+    f.dateOff = when;
+    f.dateOn = when;
+    f.dxCall = q.call;
+    f.dxGrid = q.theirGrid;
+    f.txFrequency = quint64(q.freq);
+    f.mode = q.mode;
+    f.reportSent = q.rstSent;
+    f.reportReceived = q.rstRcvd;
+    f.comments = q.comment;
+    f.name = q.name;
+    f.myCall = q.stationCall.isEmpty() ? reporterCallsign : q.stationCall;
+    f.myGrid = q.grid.isEmpty() ? reporterGrid : q.grid;
+    // Both messages, exactly as WSJT-X does: loggers pick whichever they parse.
+    wsjtxSendDatagram(WsjtxMessage::qsoLogged(wsjtxId_, f));
+    wsjtxSendDatagram(WsjtxMessage::loggedAdif(wsjtxId_, (Logbook::adifHeader() + q.toAdif()).trimmed()));
+}
+
+void webServer::wsjtxSendDecode(const QJsonObject &cmd)
+{
+    // Two browsers decoding the same audio report the same decode; forward
+    // each distinct (slot time, offset, text) once within 30 s.
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    const QString key = cmd["time"].toString() + '|' + QString::number(cmd["df"].toInt())
+                      + '|' + cmd["message"].toString();
+    for (auto it = wsjtxDecodesSent_.begin(); it != wsjtxDecodesSent_.end();) {
+        if (now - it.value() > 30000) it = wsjtxDecodesSent_.erase(it);
+        else ++it;
+    }
+    if (wsjtxDecodesSent_.contains(key)) return;
+    wsjtxDecodesSent_.insert(key, now);
+
+    WsjtxMessage::DecodeFields d;
+    d.time = QTime::fromString(cmd["time"].toString(), "hh:mm:ss");
+    d.snr = cmd["snr"].toInt();
+    d.deltaTime = cmd["dt"].toDouble();
+    d.deltaFrequency = quint32(qMax(0, cmd["df"].toInt()));
+    d.mode = cmd["mode"].toString();
+    d.message = cmd["message"].toString();
+    wsjtxSendDatagram(WsjtxMessage::decode(wsjtxId_, d));
+}
+
 void webServer::setInstanceName(const QString &name)
 {
     instanceName_ = name;
+    // Same convention as WSJT-X's "--rig-name": listeners show the tag.
+    wsjtxId_ = name.isEmpty() ? QStringLiteral("wfweb") : QStringLiteral("wfweb - ") + name;
 }
 
 static QSettings *packetSettingsFor(const QString &file)
@@ -5802,9 +6609,16 @@ void webServer::onAxLinkEstablished(int client, int chan,
         termSessions.insert(s->sid, s);
     }
     s->state = TerminalSession::Connected;
-    termAppendScrollback(s, termScrollbackEntry(QStringLiteral("info"),
-        QString("*** CONNECTED to %1").arg(peerCall).toUtf8()));
+    // Session first, data second: a brand-new (inbound) sid must reach the
+    // browser as a termSession so the tab is created and promoted; the
+    // termData then lands in that tab.  The browser only pulls termHistory
+    // when the active tab changes, so without the termData broadcast these
+    // info lines were invisible until a reload.
+    QJsonObject e = termScrollbackEntry(QStringLiteral("info"),
+        QString("*** CONNECTED to %1").arg(peerCall).toUtf8());
+    termAppendScrollback(s, e);
     termBroadcastSession(s);
+    termBroadcastData(s->sid, e);
     qInfo().noquote() << "Web: AX.25 link up" << s->sid
                       << ownCall << "<->" << peerCall
                       << (incoming ? "(inbound)" : "(outbound)");
@@ -5820,8 +6634,10 @@ void webServer::onAxLinkTerminated(int client, int chan,
     s->state = TerminalSession::Disconnected;
     QString reason = timeout ? QStringLiteral("*** DISCONNECTED (link timeout)")
                              : QStringLiteral("*** DISCONNECTED");
-    termAppendScrollback(s, termScrollbackEntry(QStringLiteral("info"), reason.toUtf8()));
+    QJsonObject e = termScrollbackEntry(QStringLiteral("info"), reason.toUtf8());
+    termAppendScrollback(s, e);
     termBroadcastSession(s);
+    termBroadcastData(s->sid, e);
     qInfo().noquote() << "Web: AX.25 link down" << s->sid
                       << "timeout=" << timeout;
 }

@@ -8,6 +8,7 @@
         <file alias="digits-sprite.png">web-shared/digits-sprite.png</file>
         <file alias="cw-decoder.js">web-shared/cw-decoder.js</file>
         <file alias="ctcss.js">web-shared/ctcss.js</file>
+        <file alias="dxcc.js">web-shared/dxcc.js</file>
         <file alias="cw-decoder-worker.js">web-shared/cw-decoder-worker.js</file>
         <file alias="cw-decoder-stft.js">web-shared/cw-decoder-stft.js</file>
         <file alias="cw-decoder-utils.js">web-shared/cw-decoder-utils.js</file>

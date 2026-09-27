@@ -33,6 +33,7 @@ servermain::servermain(const QString settingsFile, const cmdLineOverrides& overr
     qRegisterMetaType<modeInfo>();
     qRegisterMetaType<vfo_t>();
     qRegisterMetaType<scopeData>();
+    qRegisterMetaType<scopeEdgeSetting>();
     qRegisterMetaType<centerSpanData>();
     qRegisterMetaType<meter_t>();
     qRegisterMetaType<spectrumBounds>();
@@ -99,6 +100,11 @@ servermain::servermain(const QString settingsFile, const cmdLineOverrides& overr
             QMetaObject::invokeMethod(web, "setInstanceName", Qt::QueuedConnection,
                                       Q_ARG(QString, cliOverrides.name));
         }
+        QMetaObject::invokeMethod(web, "configureLogbook", Qt::QueuedConnection,
+                                  Q_ARG(QString, cliOverrides.logbook),
+                                  Q_ARG(QString, cliOverrides.remoteLogTarget),
+                                  Q_ARG(bool, cliOverrides.noRemoteLog),
+                                  Q_ARG(bool, cliOverrides.remoteLogDecodes));
         connect(queue, SIGNAL(rigCapsUpdated(rigCapabilities*)), web, SLOT(receiveRigCaps(rigCapabilities*)));
         connect(webThread, SIGNAL(finished()), web, SLOT(deleteLater()));
         connect(web, &webServer::requestPowerOn, this, &servermain::powerRigOn);
@@ -1180,13 +1186,10 @@ void servermain::initPeriodicPolling()
             if (rigCaps->hasSpectrum) {
                 queue->add(priorityImmediate, queueItem(funcScopeOnOff, QVariant::fromValue(quint8(1)), false));
                 queue->add(priorityImmediate, queueItem(funcScopeDataOutput, QVariant::fromValue(quint8(1)), false));
-                // Force Center scope mode: the web UI keeps the RX indicator fixed
-                // mid-screen and scrolls the waterfall under it, which only renders
-                // correctly when the rig reports center-mode spectrum (startFreq/endFreq
-                // re-centred on the VFO). A rig left in Fixed mode sends static band
-                // edges, so the marker/passband/span all appear frozen (issue #75).
-                if (rigCaps->commands.contains(funcScopeMode))
-                    queue->add(priorityImmediate, queueItem(funcScopeMode, QVariant::fromValue(quint8(0)), false));
+                // The scope mode (Center / Fixed / Scroll) is the browser's to set:
+                // it draws whichever the rig reports and re-commands its last pick
+                // on connect (setScopeMode, issue #113). Forcing Center here used to
+                // be the fix for issue #75, back when only Center rendered.
                 // Force Carrier Point Center: the web UI pins the RX indicator to the
                 // carrier (VFO) frequency at mid-screen, so the scope must centre on the
                 // carrier point too. With the rig set to Filter Center (0) the spectrum
@@ -1260,16 +1263,14 @@ void servermain::setManufacturer(manufacturersType_t man)
     this->rigList.clear();
     qInfo() << "Searching for radios with Manufacturer =" << man;
 
-#ifndef Q_OS_LINUX
-    QString systemRigLocation = QCoreApplication::applicationDirPath();
-#else
-    QString systemRigLocation = PREFIX;
-#endif
-
 #ifdef Q_OS_LINUX
-    systemRigLocation += "/share/wfview/rigs";
+    // Rigs shipped next to the binary win (AppImage, relocated or custom-PREFIX
+    // install); otherwise use the compile-time PREFIX, as a distro package does.
+    QString systemRigLocation = QDir::cleanPath(QCoreApplication::applicationDirPath() + "/../share/wfview/rigs");
+    if (!QDir(systemRigLocation).exists())
+        systemRigLocation = QString(PREFIX) + "/share/wfview/rigs";
 #else
-    systemRigLocation +="/rigs";
+    QString systemRigLocation = QCoreApplication::applicationDirPath() + "/rigs";
 #endif
 
     QDir systemRigDir(systemRigLocation);

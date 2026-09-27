@@ -140,7 +140,6 @@ macx:LIBS += -L/usr/local/lib -L/opt/local/lib -L/opt/homebrew/lib
 
 QMAKE_MACOSX_DEPLOYMENT_TARGET = 10.15
 QMAKE_TARGET_BUNDLE_PREFIX = org.wfweb
-QMAKE_INFO_PLIST = resources/Info.plist
 
 macx{
     rigFiles.files = rigs
@@ -367,7 +366,10 @@ SOURCES += \
     src/rigctld.cpp \
     src/ft4222handler.cpp \
     src/rtpaudio.cpp \
-    src/webserver.cpp
+    src/webserver.cpp \
+    src/wsjtxmessage.cpp \
+    src/logbook.cpp \
+    src/memorystore.cpp
 
 macx:SOURCES += src/tlsproxy.cpp
 
@@ -423,6 +425,9 @@ HEADERS  += \
     include/yaesuudpcat.h \
     include/yaesuudpcontrol.h \
     include/yaesuudpscope.h \
-    include/webserver.h
+    include/webserver.h \
+    include/wsjtxmessage.h \
+    include/logbook.h \
+    include/memorystore.h
 
 macx:HEADERS += include/tlsproxy.h

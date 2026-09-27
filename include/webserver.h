@@ -17,6 +17,11 @@
 #include <QSslSocket>
 #include <QSslKey>
 #include <QSslCertificate>
+#include <QUdpSocket>
+#include <QUrlQuery>
+#include <QSettings>
+#include <memory>
+#include "logbook.h"
 
 #if (QT_VERSION < QT_VERSION_CHECK(6,0,0))
 #include <QAudioDeviceInfo>
@@ -38,6 +43,7 @@
 #include "direwolfprocessor.h"
 #include "ax25linkprocessor.h"
 #include "aprsprocessor.h"
+#include "memorystore.h"
 
 #ifdef Q_OS_MACOS
 class TlsProxyWorker;
@@ -109,6 +115,11 @@ public slots:
     // --name tag: sent to the browser as rigInfo.name so the top bar and
     // tab title show it instead of the rig model.
     void setInstanceName(const QString &name);
+    // Logbook path and remote-logging (WSJT-X UDP) setup from settings +
+    // command-line overrides; runs once on the web thread at startup.
+    void configureLogbook(const QString &logbookOverride,
+                          const QString &remoteLogOverride,
+                          bool noRemoteLog, bool remoteLogDecodes);
     // PTT requested via rigctld (Hamlib TCP). Routed through the same
     // setPTT path the WebSocket clients use, so RADE EOO synthesis,
     // packet TX gating and ALC meter polling stay coherent.
@@ -182,7 +193,8 @@ private:
     void sendHttpResponse(QTcpSocket *socket, int statusCode, const QString &statusText,
                          const QByteArray &contentType, const QByteArray &body);
     void handleRestRequest(QTcpSocket *socket, const QString &method,
-                           const QString &path, const QByteArray &body);
+                           const QString &path, const QUrlQuery &query,
+                           const QByteArray &body);
     void sendRestResponse(QTcpSocket *socket, int statusCode, const QJsonObject &json);
     QJsonObject buildInfoJson() const;
     void sendJsonToAll(const QJsonObject &obj);
@@ -204,6 +216,27 @@ private:
     // both, which is the structural unification of TX audio plumbing.
     void txWritePcmFrame(const QByteArray &pcmMonoLE, bool applyGain);
     void handleCommand(QWebSocket *client, const QJsonObject &cmd);
+    // One station callsign + grid for the whole server, persisted under
+    // [Station] in the settings file and pushed to every browser.  Replaces
+    // the old per-browser value that the last client to connect used to
+    // overwrite (a stale tab could silently swap the call on every QSO).
+    void applyStationCallsign(const QString &call, const QString &grid, bool persist);
+    std::unique_ptr<QSettings> openSettings() const;
+    // Station logbook (see logbook.h).  These wrap the Logbook mutations
+    // with the WebSocket delta events and the WSJT-X emission.
+    bool logbookAdd(QsoRecord &r);
+    bool logbookUpdate(const QString &id, const QsoRecord &r);
+    bool logbookRemove(const QString &id);
+    void logbookReset();
+    QJsonObject logbookSummary() const;
+    bool logbookClear(const char *who);
+    void wsjtxSendHeartbeat();
+    void wsjtxSendStatus();
+    void wsjtxSendQso(const QsoRecord &qso);
+    void wsjtxSendDecode(const QJsonObject &cmd);
+    void wsjtxSendClose();
+    void wsjtxSendDatagram(const QByteArray &packet);
+    bool configureWsjtxTarget(const QString &target);
     void requestVfoUpdate();
     void disableFreeDV();
     bool isFreeDVCompatibleMode(rigMode_t mk) const;
@@ -251,6 +284,11 @@ private:
     // reconciled from queue->getState() inside sendPeriodicStatus().
     vfo_t activeVfoLocal = vfoA;
     uchar activeReceiver = 0;
+    // Mirror of "the rig is in memory mode", kept next to activeVfoLocal for
+    // the same reason: receiveCache() must not call queue->getState(). In
+    // memory mode the frequency replies describe the recalled channel, not
+    // either VFO, so they must not land in the browser's VFO A/B slots (#108).
+    bool memModeLocal = false;
 
     // SSL
     bool sslEnabled = false;
@@ -506,6 +544,19 @@ private:
     // resolves the -s flag.  Empty means "use the default (QSettings org/app)".
     QString packetSettingsFile_;
     QString instanceName_;
+    Logbook logbook_;
+    bool logbookPersistent_ = true;   // false: container without a volume, file dies with it
+    QUdpSocket *wsjtxSocket_ = nullptr;
+    QHostAddress wsjtxAddress_;
+    quint16 wsjtxPort_ = 2237;
+    bool wsjtxEnabled_ = false;
+    bool wsjtxDecodes_ = false;
+    QTimer *wsjtxHeartbeatTimer_ = nullptr;
+    QString wsjtxId_ = QStringLiteral("wfweb");
+    QString wsjtxTarget_;
+    // Two browsers decoding the same audio would forward the same decode
+    // twice; remember what went out recently, keyed on time+df+text.
+    QHash<QString, qint64> wsjtxDecodesSent_;
     void    packetLoadSettings();
     void    packetSaveSettings();
 
@@ -567,15 +618,31 @@ private:
 
     // Memory channel scanning
     QMap<quint32, memoryType> memories;  // key = (group << 16) | channel
+    QSet<quint32> memoryScanSeen;         // keys reported by the running scan
     bool memoryScanActive = false;
     int memoryScanCurrent = 0;
     int memoryScanEnd = 0;
     int memoryScanGroup = 0;
     QTimer *memoryScanTimer = nullptr;
     QJsonObject memoryToJson(const memoryType &mem);
-    QString modeRegToString(quint8 reg);
+    QString modeRegToString(quint8 reg) const;
     void scanNextMemory();
     bool recallMemoryOnRig(int channel, int group, QString *error = nullptr);
+    bool memoryContentsSupported() const;
+    void sendMemoryError(QWebSocket *client, const QString &error);
+
+    // wfweb's own channels, for rigs that can't store one (issue #114).
+    // Used exactly when memoryContentsSupported() is false, so the two paths
+    // never both apply and the browser talks the same protocol to either.
+    MemoryStore memStore;
+    QJsonObject localMemoryToJson(const localMemory &m) const;
+    void sendLocalMemories(QWebSocket *client);
+    bool writeLocalMemory(int channel, const QString &name, QString *error);
+    bool recallLocalMemory(int channel, QString *error);
+    // Replay a stored frequency + mode onto the current VFO. Shared by the
+    // local-memory recall and by recallMemoryOnRig()'s no-select-command
+    // fallback, which does exactly the same thing from the rig's own cache.
+    void applyMemoryToVfo(qint64 hz, quint8 modeReg, quint8 filter, quint8 datamode);
 
     // Repeater access tone (TONE / TSQL / DTCS). Rigs speak one of two
     // dialects — the single "Tone Squelch Type" register (IC-705/9700/905) or

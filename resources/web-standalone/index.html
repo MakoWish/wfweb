@@ -672,6 +672,11 @@ html, body {
     font-size: 11px; color: #0cc; font-family: var(--font-mono);
     text-align: center; white-space: nowrap;
 }
+/* A row whose setting has no effect in the current scope mode (HIST outside
+   CENTER, SPAN in FIXED) stays in place but dimmed and inert, so the sheet
+   never re-flows under a finger. */
+.scope-row.disabled { opacity: 0.35; pointer-events: none; }
+.scope-row.hidden { display: none; }
 #spanOverlay .ov-btn { min-height: 30px; font-size: 12px; }
 @media (max-width: 600px) {
     #spanOverlay .ov-btn { min-height: 28px; font-size: 11px; }
@@ -998,6 +1003,7 @@ body.digi-open #bottomBar { grid-row: 5; }
     position: relative;
     background: #000810;
     overflow: hidden;
+    touch-action: none;
 }
 .digi-wf-canvas {
     position: absolute;
@@ -1054,9 +1060,16 @@ body.digi-open #bottomBar { grid-row: 5; }
     font-family: var(--font-mono);
     font-size: 11px; font-weight: bold;
     white-space: nowrap;
-    padding: 1px 4px;
+    padding: 4px 10px;
+    min-width: 30px;
+    text-align: center;
     border-radius: 0 0 3px 3px;
+    /* Drag handle: the band itself stays click-through, only the tab grabs */
+    pointer-events: auto;
+    cursor: ew-resize;
+    touch-action: none;
 }
+.digi-wf-label.dragging { filter: brightness(1.3); }
 .digi-wf-tx .digi-wf-label {
     background: rgba(255,136,0,0.85);
     color: #000;
@@ -1121,8 +1134,11 @@ body.digi-open #bottomBar { grid-row: 5; }
 .digi-pane-tabs .wf-tab-unread:empty { display: none; }
 /* Right combined column: directed takes all flex space; msg section is fixed */
 .digi-right-col { flex: 1; }
-.digi-right-col .digi-directed-panel { flex: 1; min-height: 0; }
-.digi-right-col .digi-msg-rows { flex: 0 0 auto; max-height: 110px; overflow-y: auto; }
+.digi-right-col .digi-directed-panel { flex: 1; min-height: 40px; }
+/* The message rows take exactly the height they need (six rows never get
+   clipped); only on a very short window do they yield to the directed panel,
+   down to about four rows, and scroll. */
+.digi-right-col .digi-msg-rows { flex: 0 1 auto; min-height: 84px; overflow-y: auto; }
 .digi-msg-header { border-top: 1px solid #024; margin-top: 0; }
 .digi-col-header {
     background: #000820;
@@ -1177,6 +1193,19 @@ body.digi-open #bottomBar { grid-row: 5; }
 .digi-decode-row.digi-tx-pending .digi-decode-msg { color: #88a; font-style: italic; }
 .digi-logged-row { background: #001800; border-left: 3px solid #0c0; color: #0d0; padding: 2px 6px; font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.5px; }
 .digi-decode-row.digi-tx-pending .digi-decode-snr { color: #666; }
+/* DXCC entity column + worked-before hints (dxcc.js + the logbook).  Shown
+   on phones too (#122), narrower; only the hover "ENTITY x" is desktop-only. */
+.digi-decode-star { flex: 0 0 auto; font-size: 11px; line-height: 1; cursor: help; }
+.digi-decode-star.new-one  { color: #ffc83d; text-shadow: 0 0 3px rgba(255, 200, 60, .55); }
+.digi-decode-star.new-band { color: #b8c2cf; }
+.digi-decode-ent { flex: 0 0 auto; max-width: 96px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+                   color: #6d86a0; font-size: 10px; text-align: right; }
+.digi-rx-panel.no-entity .digi-decode-ent, .digi-directed-panel.no-entity .digi-decode-ent { display: none; }
+.digi-decode-row.worked:not(.directed) .digi-decode-msg { color: #7d93a8; font-weight: normal; }
+.digi-decode-row.worked:not(.directed) .digi-decode-freq { opacity: .6; }
+.digi-ent-hide { float: right; color: #6d86a0; cursor: pointer; visibility: hidden; letter-spacing: 0.5px; }
+.digi-ent-hide:hover { color: #fff; }
+.digi-decode-col:hover .digi-ent-hide { visibility: visible; }
 .digi-slot-divider { border-top: 1px solid var(--mode-accent-dim); margin: 4px 0 2px 0; padding: 2px 6px; text-align: center; }
 .digi-slot-divider .digi-slot-time { color: var(--mode-accent); font-size: 10px; font-weight: bold; }
 .digi-decode-time { color: #556; min-width: 36px; font-size: 10px; }
@@ -1797,6 +1826,7 @@ body.digi-open #bottomBar { grid-row: 5; }
     border-radius: 3px;
 }
 .mem-action-btn:active { background: #048; color: #000; }
+.mem-action-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
 
 .gain-bar-fill.centered {
@@ -2052,16 +2082,17 @@ body.digi-open #bottomBar { grid-row: 5; }
     /* Compact message rows on mobile */
     /* Message rows stay compact but every control is >= 26px tall so it
        can actually be tapped (the 14-18px originals were below the 24px
-       WCAG floor). The row box grows to 130px and scrolls. */
+       WCAG floor). */
     .digi-msg-row { padding: 2px 3px; gap: 4px; }
     .digi-msg-row-input { font-size: 11px; min-height: 26px; box-sizing: border-box; }
     .digi-msg-row-warn { padding-left: 6px; }
     .digi-msg-send-btn { min-width: 52px; min-height: 26px; font-size: 10px; }
     .digi-cq-parity-btn, .digi-call-cq-btn { font-size: 10px; padding: 4px 2px; min-height: 26px; }
-    .digi-right-col .digi-msg-rows { max-height: 130px; }
     /* All Decodes panel: keep SNR, hide dt and Hz */
     #digiRxPanel .digi-decode-dt,
     #digiRxPanel .digi-decode-freq { display: none; }
+    .digi-ent-hide { display: none; }
+    .digi-decode-ent { max-width: 84px; }
     /* Phone: two columns don't fit — the Directed pane collapsed to one
        clipped line under the QSO message rows, and decodes squeezed into
        half the width. Show one pane at a time, full width, picked by the
@@ -2426,12 +2457,18 @@ body.digi-open #bottomBar { grid-row: 5; }
 
         <!-- Span overlay -->
         <div id="spanOverlay" class="overlay">
-            <div class="scope-row"><span class="scope-row-label">Span</span>
+            <div class="scope-row" id="spanRow"><span class="scope-row-label">Span</span>
                 <div class="overlay-grid" id="spanGrid"></div></div>
-            <div class="scope-row"><span class="scope-row-label">Mode</span>
+            <!-- SPAN doubles as the FIXED window picker (BAND / a width) on rigs
+                 that let us write their edges. MODE is the rig's own scope mode
+                 (CENTER / FIXED / SCROLL); HIST is what this page does with the
+                 waterfall history when a CENTER-mode tune moves the window. -->
+            <div class="scope-row" id="scopeModeRow"><span class="scope-row-label">Mode</span>
+                <div class="overlay-grid" id="scopeModeGrid"></div></div>
+            <div class="scope-row" id="wfHistRow"><span class="scope-row-label">Hist</span>
                 <div class="overlay-grid">
-                    <button class="ov-btn active" id="wfTrackFixedBtn" onclick="setWfTracking('fixed')" title="Waterfall stays put on tune, like the rig's screen">FIXED</button>
-                    <button class="ov-btn" id="wfTrackTrackBtn" onclick="setWfTracking('track')" title="Waterfall history pans on tune so frequencies stay aligned">TRACK</button>
+                    <button class="ov-btn active" id="wfHistHoldBtn" onclick="setWfHistory('hold')" title="Waterfall history stays where it was painted when you tune, like the rig's screen">HOLD</button>
+                    <button class="ov-btn" id="wfHistPanBtn" onclick="setWfHistory('pan')" title="Waterfall history pans when you tune so frequencies stay aligned">PAN</button>
                 </div></div>
             <div class="scope-row"><span class="scope-row-label">Ref</span>
                 <div class="overlay-grid">
@@ -2493,7 +2530,7 @@ body.digi-open #bottomBar { grid-row: 5; }
         <!-- Memory modal (styled like QSO Log) -->
         <div id="memoryOverlay" class="mem-modal">
             <div class="mem-modal-title">
-                <span>Memories <span id="memScanStatus"></span></span>
+                <span>Memories <span id="memLocalBadge" class="wf-badge" style="display:none" title="This radio cannot store memory channels over CI-V, so wfweb keeps them itself. They are not written to the radio.">wfweb</span> <span id="memScanStatus"></span></span>
                 <span id="memGroupRow" class="mode-digi" style="display:none;flex:0 0 auto;font-weight:normal;">
                     <label for="memGroupSelect" style="color:var(--mode-accent-dim);">Group</label>
                     <select id="memGroupSelect" class="wf-field" onchange="onMemGroupChange()"></select>
@@ -2509,7 +2546,7 @@ body.digi-open #bottomBar { grid-row: 5; }
                 <div id="memoryList"></div>
             </div>
             <div class="mem-actions">
-                <button class="mem-action-btn" onclick="memorySaveCurrent()" title="Save the current frequency and mode into a memory channel">&#xFF0B; Save</button>
+                <button id="memSaveBtn" class="mem-action-btn" onclick="memorySaveCurrent()" title="Save the current frequency and mode into a memory channel" disabled>&#xFF0B; Save</button>
                 <button class="mem-action-btn" onclick="refreshMemories()">Refresh</button>
             </div>
             <div id="memSaveBar">
@@ -2598,7 +2635,7 @@ body.digi-open #bottomBar { grid-row: 5; }
                 </div>
                 <!-- Left: All Decodes -->
                 <div class="digi-decode-col">
-                    <div class="digi-col-header">All Decodes</div>
+                    <div class="digi-col-header">All Decodes<span class="digi-ent-hide" title="Hide the entity column (Station Settings brings it back)" onclick="setDigiEntityCol(false)">ENTITY &#x2715;</span></div>
                     <div id="digiRxPanel" class="digi-rx-panel"></div>
                 </div>
                 <!-- Right: Directed (top) + QSO Messages (bottom) -->
@@ -2614,13 +2651,14 @@ body.digi-open #bottomBar { grid-row: 5; }
                 </div>
             </div>
 
-            <!-- Frequency ruler: 300–2800 Hz, click to set TX/RX freq -->
+            <!-- Frequency ruler: 300–2800 Hz. Click sets RX + TX (TX unless Hold TX),
+                 Shift+click TX only, Ctrl+click RX only, or drag a marker tab. -->
             <div class="digi-waterfall-wrap" id="digiWaterfallWrap">
-                <div class="digi-wf-bar" id="digiWfBar">
+                <div class="digi-wf-bar" id="digiWfBar" title="Click: set RX + TX · Shift+click: TX only · Ctrl+click: RX only · drag a tab to move one marker">
                     <canvas id="digiWfCanvas" class="digi-wf-canvas"></canvas>
                     <canvas id="digiWfLabelCanvas" class="digi-wf-label-canvas"></canvas>
-                    <div id="digiWfRxMarker" class="digi-wf-marker digi-wf-rx"><span class="digi-wf-label">RX</span></div>
-                    <div id="digiWfTxMarker" class="digi-wf-marker digi-wf-tx"><span class="digi-wf-label">TX</span></div>
+                    <div id="digiWfRxMarker" class="digi-wf-marker digi-wf-rx"><span class="digi-wf-label" title="Drag to move RX">RX</span></div>
+                    <div id="digiWfTxMarker" class="digi-wf-marker digi-wf-tx"><span class="digi-wf-label" title="Drag to move TX">TX</span></div>
                 </div>
                 <div class="digi-wf-scale">
                     <span>300</span><span>800</span><span>1.3k</span><span>1.8k</span><span>2.3k</span><span>2.8k</span>
@@ -2631,14 +2669,12 @@ body.digi-open #bottomBar { grid-row: 5; }
             <div class="digi-action-row">
                 <button id="digiLogQsoBtn" class="digi-action-btn wf-btn">Log QSO</button>
                 <button id="digiEraseBtn" class="digi-action-btn wf-btn">Erase</button>
-                <button id="digiHoldTxBtn" class="digi-action-btn wf-btn">Hold TX</button>
+                <button id="digiHoldTxBtn" class="digi-action-btn wf-btn" title="Clicks move RX only; Shift+click or dragging the TX tab still moves TX">Hold TX</button>
                 <div class="digi-freq-group">
                     <span class="digi-field-label">TX:</span>
-                    <input type="number" id="digiTxFreqDisplay" class="digi-tx-freq-display" min="300" max="2800" step="1" value="1000">
-                    <span class="digi-field-label">Hz</span>
+                    <input type="number" id="digiTxFreqDisplay" class="digi-tx-freq-display" min="300" max="2800" step="1" value="1000" title="TX audio offset (Hz)">
                     <span class="digi-field-label">RX:</span>
-                    <input type="number" id="digiRxFreqDisplay" class="digi-rx-freq-display" min="300" max="2800" step="1" value="1000">
-                    <span class="digi-field-label">Hz</span>
+                    <input type="number" id="digiRxFreqDisplay" class="digi-rx-freq-display" min="300" max="2800" step="1" value="1000" title="RX audio offset (Hz)">
                 </div>
             </div>
 
@@ -2675,6 +2711,18 @@ body.digi-open #bottomBar { grid-row: 5; }
                     <span class="digi-field-label">SECTION:</span>
                     <select id="digiFdSectionSel" class="wf-field" title="ARRL/RAC section"></select>
                 </div>
+            </div>
+            <div class="digi-settings-field" style="margin-top:6px">
+                <label style="display:flex;align-items:center;gap:6px;color:#8cf;font-size:12px;cursor:pointer">
+                    <input type="checkbox" id="digiEntityCol">
+                    <span>DXCC entity column in decodes</span>
+                </label>
+            </div>
+            <div class="digi-settings-field">
+                <label style="display:flex;align-items:center;gap:6px;color:#8cf;font-size:12px;cursor:pointer">
+                    <input type="checkbox" id="digiWorkedHints">
+                    <span>Worked-before hints (<span style="color:#ffc83d">&#9733;</span> new one, <span style="color:#b8c2cf">&#9733;</span> new on this band, worked stations dimmed)</span>
+                </label>
             </div>
             <div class="digi-settings-field" style="margin-top:6px">
                 <label style="display:flex;align-items:center;gap:6px;color:#8cf;font-size:12px;cursor:pointer">
@@ -2979,6 +3027,7 @@ var vfoAFreq = 0;
 var vfoBFreq = 0;
 var currentMode = '';
 var tuneStep = 1000;
+var FAST_TUNE_STEP = 10000;  // Shift/Ctrl + Up/Down (#120)
 var isTransmitting = false;
 var isSplit = false;
 var rigPoweredOn = true;
@@ -3129,11 +3178,23 @@ var spectData = null;
 var spectDataLen = 0;
 var wfImageData = null;
 var wfOffCanvas = null;
+var scopeDpr = 1;                // devicePixelRatio the scope canvases were last sized for (resizeCanvases)
 var wfOffCtx = null;
 var spectRenderPending = false;
 var colorTable = null;
 // Browser-side scope settings (persisted in localStorage).
-var wfTracking = 'fixed';        // 'fixed' | 'track' — waterfall scrolling on tune, see setWfTracking()
+var wfHistory = 'hold';          // 'hold' | 'pan' — what the waterfall history does on a CENTER-mode tune, see setWfHistory()
+var scopeMode = 0;               // the rig's scope mode as each sweep reports it: 0 CENTER, 1 FIXED, 2 SCROLL-C, 3 SCROLL-F (0x27 0x14)
+var scopeModePref = null;        // last mode seen or tapped (localStorage wfScopeMode); re-commanded on connect
+var SCOPE_MODE_LABELS = { 0: 'CENTER', 1: 'FIXED', 2: 'SCROLL', 3: 'SCROLL-F' };   // 2 is the rig's "SCROLL-C"; the suffix only tells it from -F, which we don't offer
+var availableScopeModes = [];    // [{num,name}] the rig offers, from rigInfo; the keys in the SPAN sheet
+var spectOor = false;            // this sweep is flagged out of range (FIXED: VFO outside the window, data blank)
+var scopeDragFreq = 0;           // frequency under the finger while dragging on fixed glass (modes != CENTER)
+var scopeDragPaged = false;      // this drag pushed the VFO past an edge (SCROLL): no more tunes until the finger comes back in
+var scopeFixedEdges = false;     // rigInfo: the rig file has the 0x27 0x1E range table, so FIXED windows can be set from here
+var fixedEdgeChoice = 'band';    // a browser-set FIXED window covers: 'band' = the ham band, or a span index = that width around the VFO
+var fixedWindowOwned = false;    // this page wrote the current FIXED window, so it may follow band changes
+var scopeFixedBand = null;       // band label that window was built for
 var wfSpeed = 'mid';             // 'slow' | 'mid' | 'fast' — waterfall rows per sweep, mirrored to the rig's scope speed
 var WF_SPEED_ROWS = { slow: 1, mid: 2, fast: 4 };
 var WF_SPEED_CIV = { fast: 0, mid: 1, slow: 2 };   // CI-V 27 1A values
@@ -3243,6 +3304,7 @@ var digiLogEditIdx = -1; // index of row currently being edited, -1 = none
 var digiHashBook = null;
 var digiQsoState = 'IDLE';
 var digiQsoPartner = '';
+var digiQsoPartnerBusyWith = ''; // third station the partner was working when we clicked (tail-end); their traffic to it must not trip the auto-desist
 var digiTheirReport = '';  // report they sent us
 var digiOurReport = '';    // report we sent them (for logging)
 // ── ARRL Field Day (#73) — opt-in contest mode; '' leaves standard FT8/FT4 unchanged ──
@@ -3261,7 +3323,7 @@ var digiFdLogged = false;  // guard so each FD QSO is logged once
 var digiCqOnly = false;
 var digiTxFreq = 1000;      // audio TX frequency (Hz) within SSB passband
 var digiRxFreq = 1000;      // audio RX frequency (Hz) — decodes here also appear in Directed
-var digiHoldTxFreq = false; // when true, clicking a row does not change TX freq
+var digiHoldTxFreq = false; // when true, clicks move RX only (Shift+click / TX-tab drag still move TX)
 // Waterfall renderer + circular sample buffer live in
 // resources/web-shared/wf-canvas.js (loaded above). WF_FFT_SIZE,
 // WF_DISPLAY_BINS, WF_FREQ_LOW, WF_FREQ_HIGH, wfBuf, wfBufPos,
@@ -3413,6 +3475,8 @@ function handleMessage(msg) {
                 if (msg.audioError) showAudioError(msg.audioError);
                 updateTxAudioAvailable(msg.txAudioAvailable || false);
                 if (msg.spans) populateSpans(msg.spans);
+                if (msg.scopeModes) populateScopeModes(msg.scopeModes);
+                if (msg.scopeFixedEdges !== undefined) scopeFixedEdges = !!msg.scopeFixedEdges;
                 if (msg.preamps) populatePreamps(msg.preamps);
                 if (msg.attenuators) populateAttenuators(msg.attenuators);
             if (msg.bands) populateBands(msg.bands);
@@ -3426,6 +3490,7 @@ function handleMessage(msg) {
                 if (msg.hasTuner !== undefined) updateHasTuner(!!msg.hasTuner);
                 if (msg.txMeters !== undefined) setTxMeterCaps(msg.txMeters);
                 if (msg.hasMemoryMode !== undefined) hasMemoryMode = !!msg.hasMemoryMode;
+                if (msg.memoriesLocal !== undefined) setMemoriesLocal(!!msg.memoriesLocal);
                 if (msg.memGroups !== undefined) setupMemoryGroups(msg.memGroups, msg.memStart || 0);
 
                 updateWarningVisibility();
@@ -3444,6 +3509,8 @@ function handleMessage(msg) {
             if (msg.audioError) showAudioError(msg.audioError);
             updateTxAudioAvailable(msg.txAudioAvailable || false);
             if (msg.spans) populateSpans(msg.spans);
+            if (msg.scopeModes) populateScopeModes(msg.scopeModes);
+            if (msg.scopeFixedEdges !== undefined) scopeFixedEdges = !!msg.scopeFixedEdges;
             if (msg.preamps) populatePreamps(msg.preamps);
             if (msg.attenuators) populateAttenuators(msg.attenuators);
             if (msg.bands) populateBands(msg.bands);
@@ -3457,6 +3524,7 @@ function handleMessage(msg) {
             if (msg.hasTuner !== undefined) updateHasTuner(!!msg.hasTuner);
             if (msg.txMeters !== undefined) setTxMeterCaps(msg.txMeters);
             if (msg.hasMemoryMode !== undefined) hasMemoryMode = !!msg.hasMemoryMode;
+            if (msg.memoriesLocal !== undefined) setMemoriesLocal(!!msg.memoriesLocal);
             if (msg.memGroups !== undefined) setupMemoryGroups(msg.memGroups, msg.memStart || 0);
             if (msg.hasPowerControl) document.getElementById('powerBtn').style.display = 'flex';
             if (msg.freedvModes) freedvModes = msg.freedvModes;
@@ -3502,6 +3570,7 @@ function handleMessage(msg) {
             updateToneStatus(msg);
             if (msg.duplexOffset !== undefined) updateDupOffset(msg.duplexOffset);
             if (msg.spanIndex !== undefined) updateSpanIndex(msg.spanIndex);
+            if (msg.scopeMode !== undefined) scopeModeReported(msg.scopeMode);
             if (msg.nb !== undefined) updateToggle('nb', msg.nb);
             if (msg.nr !== undefined) updateToggle('nr', msg.nr);
             if (msg.autoNotch !== undefined) updateToggle('anf', msg.autoNotch);
@@ -3549,6 +3618,7 @@ function handleMessage(msg) {
             updateToneStatus(msg);
             if (msg.duplexOffset !== undefined) updateDupOffset(msg.duplexOffset);
             if (msg.spanIndex !== undefined) updateSpanIndex(msg.spanIndex);
+            if (msg.scopeMode !== undefined) scopeModeReported(msg.scopeMode);
             if (msg.nb !== undefined) updateToggle('nb', msg.nb);
             if (msg.nr !== undefined) updateToggle('nr', msg.nr);
             if (msg.autoNotch !== undefined) updateToggle('anf', msg.autoNotch);
@@ -3598,6 +3668,9 @@ function handleMessage(msg) {
         case 'memoryScanComplete':
             handleMemoryScanComplete(msg);
             break;
+        case 'memoryError':
+            handleMemoryError(msg);
+            break;
         case 'freedvStatus':
             updateFreeDVStatus(msg);
             break;
@@ -3642,11 +3715,23 @@ function handleMessage(msg) {
 // ============================================================
 // UI UPDATES
 // ============================================================
+// Tuning away from a recalled local channel un-lights its row. Rig memories
+// get this for free: leaving memory mode clears currentVfo.
+function clearLocalMemIfTunedAway(hz) {
+    if (!memoriesLocal || memChannel === null) return;
+    var mem = memoryChannels[(memChannelGroup || 0) * 65536 + memChannel];
+    if (!mem || mem.frequency === hz) return;
+    memChannel = null;
+    if (document.getElementById('memoryOverlay').classList.contains('visible')) renderMemoryList();
+}
+
 function updateFrequency(hz) {
+    clearLocalMemIfTunedAway(hz);
     if (hz === null) {
         // The server sends null when the rig has no frequency to report (blank
         // memory channel). Show dashes rather than drawing 0.000.000.
         currentFreq = 0;
+        scopeRenderOnTune();
         var blank = document.getElementById('freqDisplay');
         blank.innerHTML = '';
         '---.---.---'.split('').forEach(function(ch) {
@@ -3658,6 +3743,7 @@ function updateFrequency(hz) {
         return;
     }
     currentFreq = hz;
+    scopeRenderOnTune();
 
     // Crossing a front-end boundary (IC-705: 74.8 MHz) changes which P.AMP and
     // ATT steps the rig has, and changing band changes the repeater shifts on
@@ -3680,6 +3766,9 @@ function updateFrequency(hz) {
             break;
         }
     }
+    // A window this page set follows the band: on a band change the rig
+    // switches to the new range's own edge set 3, whatever was left there.
+    if (scopeMode === 1 && fixedWindowOwned && bandLabelOf(hz) !== scopeFixedBand) applyFixedWindow();
 
     // Store frequency for current VFO only (not in memory mode — the recalled
     // channel's freq must not overwrite either VFO's cached value)
@@ -4347,12 +4436,20 @@ function updateAntennaState(ant, rx) {
 function updateSpanIndex(idx) {
     currentSpanIndex = idx;
     if (currentPanel === 'span') renderSpanOverlay();
-    // Update span indicator
+    // Update span indicator. On fixed glass (FIXED / SCROLL-F) the width comes
+    // from the rig's edge set, not the span setting, so show the window width.
     var spanText = 'SPAN';
-    if (idx >= 0 && idx < availableSpans.length) {
+    if ((scopeMode === 1 || scopeMode === 3) && spectEndFreq > spectStartFreq) {
+        spanText = formatSpanWidth((spectEndFreq - spectStartFreq) * 1e6);
+    } else if (idx >= 0 && idx < availableSpans.length) {
         spanText = availableSpans[idx].name;
     }
     document.getElementById('spanIndicator').textContent = spanText;
+}
+function formatSpanWidth(hz) {
+    if (hz >= 1e6) return (hz / 1e6).toFixed(hz % 1e6 ? 1 : 0) + 'M';
+    var k = hz / 1e3;
+    return (k >= 100 ? k.toFixed(0) : (k % 1 ? k.toFixed(1) : k.toFixed(0))) + 'k';
 }
 
 // ============================================================
@@ -5945,13 +6042,39 @@ function cycleAntenna() {
 function renderSpanOverlay() {
     var grid = document.getElementById('spanGrid');
     grid.innerHTML = '';
+    // In FIXED, on a rig whose edges we can write, this row picks the window
+    // instead of the span: BAND = the whole ham band, a span key = that width
+    // around the VFO (see applyFixedWindow).
+    var pickWindow = scopeMode === 1 && scopeFixedEdges;
+    if (pickWindow) {
+        var bb = document.createElement('button');
+        bb.className = 'ov-btn' + (fixedEdgeChoice === 'band' ? ' active' : '');
+        bb.textContent = 'BAND';
+        bb.onclick = function() { setFixedWindow('band'); };
+        grid.appendChild(bb);
+    }
     for (var i = 0; i < availableSpans.length; i++) {
         var btn = document.createElement('button');
-        btn.className = 'ov-btn' + (i === currentSpanIndex ? ' active' : '');
+        var active = pickWindow ? (fixedEdgeChoice === i) : (i === currentSpanIndex);
+        btn.className = 'ov-btn' + (active ? ' active' : '');
         btn.textContent = availableSpans[i].name;
-        btn.onclick = (function(idx) { return function() { setSpan(idx); }; })(i);
+        btn.onclick = (function(idx) { return function() {
+            if (scopeMode === 1 && scopeFixedEdges) setFixedWindow(idx); else setSpan(idx);
+        }; })(i);
         grid.appendChild(btn);
     }
+    var mg = document.getElementById('scopeModeGrid');
+    mg.innerHTML = '';
+    for (var m = 0; m < availableScopeModes.length; m++) {
+        var num = availableScopeModes[m].num;
+        var mb = document.createElement('button');
+        mb.className = 'ov-btn';
+        mb.textContent = SCOPE_MODE_LABELS[num] || availableScopeModes[m].name;
+        mb.onclick = (function(n) { return function() { setScopeMode(n); }; })(num);
+        mg.appendChild(mb);
+    }
+    document.getElementById('scopeModeRow').classList.toggle('hidden', availableScopeModes.length === 0);
+    updateScopeModeUi();
     document.getElementById('spanOverlay').classList.add('visible');
 }
 
@@ -5960,6 +6083,10 @@ var memoryChannels = {};
 var memGroupList = [];       // valid memory-group numbers for this rig ([] = rig has no groups)
 var memCurrentGroup = 0;     // group the browser is currently reading/writing
 var memCapsSeen = null;      // "memGroups/memStart" caps last applied
+var memScanSeen = null;      // keys reported since the running scan started; null = no scan
+var memListReady = false;    // the viewed group has been read through at least once
+var memErrorTimer = null;    // clears a failed-action message from the title
+var memoriesLocal = false;   // channels are wfweb's own, not the radio's (#114)
 
 // Build the group list + selector from rig caps. memGroups is the highest
 // group number, memStart the lowest; a rig with no groups reports
@@ -5971,6 +6098,10 @@ function setupMemoryGroups(memGroups, memStart) {
     var caps = memGroups + '/' + memStart;
     if (caps === memCapsSeen) return;
     memCapsSeen = caps;
+    // Different caps means a different radio: forget its channels.
+    memoryChannels = {};
+    memListReady = false;
+    memSaveBtnSync();
     memGroupList = [];
     for (var g = memStart; g <= memGroups; g++) memGroupList.push(g);
     // Rigs with a single group (IC-7610/7760/785x) don't carry a group byte
@@ -5996,7 +6127,20 @@ function setupMemoryGroups(memGroups, memStart) {
 
 function onMemGroupChange() {
     memCurrentGroup = parseInt(document.getElementById('memGroupSelect').value, 10) || 0;
+    // A different group is a different list: drop the old one rather than
+    // reconciling it, and hold "+ Save" until this group has been read once.
+    memoryChannels = {};
+    memListReady = false;
+    memSaveBtnSync();
     refreshMemories();
+}
+
+// "+ Save" picks its target from memoryChannels, so it stays disabled until
+// the viewed group has been read through once. Rescans keep the last complete
+// picture on screen (see refreshMemories), so the button never goes back off.
+function memSaveBtnSync() {
+    var b = document.getElementById('memSaveBtn');
+    if (b) b.disabled = !memListReady;
 }
 
 function renderMemoryOverlay() {
@@ -6018,10 +6162,18 @@ function closeMemoryModal() {
 }
 
 function refreshMemories() {
-    memoryChannels = {};
-    document.getElementById('memoryList').innerHTML =
-        '<div class="memory-empty">Scanning...</div>';
-    document.getElementById('memScanStatus').textContent = 'scanning...';
+    // The last complete picture stays on screen while the rig is re-read: a
+    // scan is one round-trip per channel (10-20 s on a serial rig) and every
+    // save triggers one, so wiping the list here let a second "+ Save"
+    // propose a channel the rescan simply had not reached yet and overwrite
+    // it. Entries the rescan does not report again are dropped when it
+    // completes (handleMemoryScanComplete).
+    memScanSeen = {};
+    if (Object.keys(memoryChannels).length === 0) {
+        document.getElementById('memoryList').innerHTML =
+            '<div class="memory-empty">Scanning...</div>';
+    }
+    setMemStatus('scanning...');
     // Start at 0: zero-based rigs (IC-705/905) have a real channel 0. Rigs
     // whose channels start at 1 just drop the out-of-range first read and
     // the scan moves on.
@@ -6040,11 +6192,22 @@ function renderMemoryList() {
         var mem = memoryChannels[keys[i]];
         if (mem.del || mem.empty) continue;
         var row = document.createElement('div');
-        var isCurrent = currentVfo === 'MEM' && memChannel === mem.channel
+        // Local channels never put the rig in MEM mode — there is no rig
+        // channel to select — so the lit row is driven by the last recall
+        // instead, and cleared as soon as the dial moves off it.
+        var isCurrent = (memoriesLocal || currentVfo === 'MEM') && memChannel === mem.channel
             && (memChannelGroup === null || (mem.group || 0) === memChannelGroup);
         row.className = 'memory-row' + (isCurrent ? ' current' : '');
         row.setAttribute('data-key', keys[i]);
         var name = (mem.name || '').trim();
+        // "+ Save" labels a channel with its own frequency and mode
+        // ("14.200 USB"), and the rig may truncate that to its name field.
+        // Shown as a name it just restates the line below it, and reads like
+        // a second, differently formatted frequency — so drop it and let the
+        // row show the frequency alone. A name the operator typed is kept
+        // (#108).
+        var autoLabel = ((mem.frequency || 0) / 1e6).toFixed(3) + ' ' + (mem.mode || '');
+        if (name.length >= 8 && autoLabel.indexOf(name) === 0) name = '';
         var sub = formatMemFreq(mem.frequency) + ' \u00b7 ' + (mem.mode || '?');
         var toneBadge = memToneBadge(mem);
         if (toneBadge) sub += ' \u00b7 ' + toneBadge;
@@ -6114,6 +6277,7 @@ function handleMemoryChannel(msg) {
     // reply's group (0) wouldn't match and would empty the list.
     if (memGroupList.length >= 2 && (mem.group || 0) !== memCurrentGroup) return;
     var key = (mem.group || 0) * 65536 + mem.channel;
+    if (memScanSeen) memScanSeen[key] = true;
     if (mem.del || mem.empty) {
         delete memoryChannels[key];
     } else {
@@ -6127,13 +6291,24 @@ function handleMemoryChannel(msg) {
 
 function handleMemoryScanComplete(msg) {
     if (msg.error) {
-        document.getElementById('memScanStatus').textContent = '';
+        memScanSeen = null;
+        setMemStatus('');
         document.getElementById('memoryList').innerHTML =
             '<div class="memory-empty">' + msg.error + '</div>';
         return;
     }
-    document.getElementById('memScanStatus').textContent =
-        msg.count ? msg.count + ' found' : '';
+    if (memScanSeen) {
+        // Channels the rescan did not report were cleared on the radio, or a
+        // provisional save never landed: drop them now the picture is complete.
+        var keys = Object.keys(memoryChannels);
+        for (var i = 0; i < keys.length; i++) {
+            if (!memScanSeen[keys[i]]) delete memoryChannels[keys[i]];
+        }
+        memScanSeen = null;
+    }
+    memListReady = true;
+    memSaveBtnSync();
+    setMemStatus(msg.count ? msg.count + ' found' : '');
     if (document.getElementById('memoryOverlay').classList.contains('visible')) renderMemoryList();
 }
 
@@ -6156,6 +6331,7 @@ function nextFreeMemoryChannel() {
 // "146.955 FM" (short enough for the 10-char name fields; rename with the
 // pencil afterwards).
 function memorySaveCurrent() {
+    if (!memListReady) return; // button is disabled until the first scan completes
     document.getElementById('memSaveCh').value = nextFreeMemoryChannel();
     document.getElementById('memSaveBar').classList.add('visible');
 }
@@ -6172,8 +6348,44 @@ function memorySaveConfirm() {
         name = (currentFreq / 1e6).toFixed(3) + ' ' + (currentMode || '');
     }
     send({ cmd: 'writeMemory', channel: ch, group: memCurrentGroup, name: name.trim() });
+    // Show the channel at once and keep it out of the next "+ Save" proposal.
+    // The rescan below replaces it with what the rig actually stored, or
+    // drops it if the write was refused.
+    memoryChannels[memCurrentGroup * 65536 + ch] = {
+        channel: ch, group: memCurrentGroup, name: name.trim(),
+        frequency: currentFreq, mode: currentMode,
+    };
+    renderMemoryList();
     memorySaveCancel();
     setTimeout(refreshMemories, 500);
+}
+
+// Radios that can't store a channel themselves (IC-718, IC-706 — issue #114)
+// get wfweb's own list. Same panel, same commands; the badge is there so
+// nobody mistakes these for channels the radio knows about.
+function setMemoriesLocal(local) {
+    memoriesLocal = local;
+    var b = document.getElementById('memLocalBadge');
+    if (b) b.style.display = local ? '' : 'none';
+}
+
+// Single writer for the memory panel's status line, so a red failure message
+// can't outlive the next scan.
+function setMemStatus(text, isError) {
+    var el = document.getElementById('memScanStatus');
+    if (!el) return;
+    clearTimeout(memErrorTimer);
+    el.textContent = text;
+    el.style.color = isError ? 'var(--state-error)' : '';
+    if (isError) memErrorTimer = setTimeout(function () { setMemStatus(''); }, 5000);
+}
+
+// A memory action the rig can't perform — no contents command, or a rig file
+// with no MemFormat (issue #114). The panel is already open, so report it
+// where the scan status goes instead of only in the console.
+function handleMemoryError(msg) {
+    memorySaveCancel();
+    setMemStatus(msg.error || 'Memory command failed', true);
 }
 
 function memorySaveCancel() {
@@ -6187,6 +6399,7 @@ function startMemoryRename(row, m) {
     input.type = 'text';
     input.maxLength = 16;
     input.className = 'mem-rename-input';
+    input.placeholder = 'channel name';
     input.value = (m.name || '').trim();
     main.innerHTML = '';
     main.appendChild(input);
@@ -6410,6 +6623,12 @@ function updateMemPanelVfoRow() {
         var el = document.getElementById(segs[k]);
         if (el) el.classList.toggle('active', currentVfo === k);
     }
+    // A Main/Sub rig (IC-7600/7610/785x/7760) has no VFO A/B at all, so name
+    // the two bands the way the radio and the VFO tile do (#108).
+    var segA = document.getElementById('memVfoA');
+    var segB = document.getElementById('memVfoB');
+    if (segA) segA.textContent = hasMainSub ? 'MAIN' : 'VFO A';
+    if (segB) segB.textContent = hasMainSub ? 'SUB'  : 'VFO B';
     var memBtn = document.getElementById('memVfoMem');
     if (memBtn) {
         memBtn.style.display = hasMemoryMode ? '' : 'none';
@@ -6731,17 +6950,20 @@ function toggleFullscreen() {
     }
 }
 
-function tuneUp() {
+// step defaults to tuneStep (1 kHz); Shift/Ctrl + arrow keys pass FAST_TUNE_STEP.
+function tuneUp(step) {
+    step = step || tuneStep;
     if (currentFreq > 0) {
-        var newFreq = currentFreq + tuneStep;
+        var newFreq = currentFreq + step;
         // Round down to nearest kHz (reset Hz to 000)
         newFreq = Math.floor(newFreq / 1000) * 1000;
         send({ cmd: 'setFrequency', value: newFreq });
     }
 }
-function tuneDown() {
-    if (currentFreq > tuneStep) {
-        var newFreq = currentFreq - tuneStep;
+function tuneDown(step) {
+    step = step || tuneStep;
+    if (currentFreq > step) {
+        var newFreq = currentFreq - step;
         // Round down to nearest kHz (reset Hz to 000)
         newFreq = Math.floor(newFreq / 1000) * 1000;
         send({ cmd: 'setFrequency', value: newFreq });
@@ -7089,8 +7311,17 @@ function wfFillBlank(d, from, to) {
 
 function loadScopeSettings() {
     try {
-        var t = localStorage.getItem('wfTracking');
-        if (t === 'track' || t === 'fixed') wfTracking = t;
+        var hs = localStorage.getItem('wfHistory');
+        if (hs === null) {
+            // Before #113 this setting was called FIXED / TRACK under 'wfTracking';
+            // FIXED now names the rig's scope mode, so carry the old pick over once.
+            var t = localStorage.getItem('wfTracking');
+            if (t === 'track') hs = 'pan'; else if (t === 'fixed') hs = 'hold';
+            if (hs) { localStorage.setItem('wfHistory', hs); localStorage.removeItem('wfTracking'); }
+        }
+        if (hs === 'hold' || hs === 'pan') wfHistory = hs;
+        var sm = parseInt(localStorage.getItem('wfScopeMode'), 10);
+        if (sm >= 0 && sm <= 3) scopeModePref = sm;
         var r = localStorage.getItem('wfScopeRef');
         if (r !== null && r !== '') {
             var v = parseFloat(r);
@@ -7099,7 +7330,7 @@ function loadScopeSettings() {
         var sp = localStorage.getItem('wfSpeed');
         if (WF_SPEED_ROWS[sp]) wfSpeed = sp;
     } catch (e) {}
-    setWfTracking(wfTracking, true);
+    setWfHistory(wfHistory, true);
     setWfSpeed(wfSpeed, true);
     updateScopeRefUi();
 }
@@ -7115,14 +7346,110 @@ function setWfSpeed(sp, quiet) {
     send({ cmd: 'setScopeSpeed', value: WF_SPEED_CIV[wfSpeed] });
 }
 
-function setWfTracking(mode, quiet) {
-    wfTracking = mode === 'track' ? 'track' : 'fixed';
-    var fb = document.getElementById('wfTrackFixedBtn'), tb = document.getElementById('wfTrackTrackBtn');
-    if (fb) fb.classList.toggle('active', wfTracking === 'fixed');
-    if (tb) tb.classList.toggle('active', wfTracking === 'track');
-    // FIXED: nothing slides and nothing pauses, even mid-drag.
-    if (wfTracking === 'fixed') { scopeSetVisualPan(0); scopeFreezeDuringDrag = false; }
-    if (!quiet) { try { localStorage.setItem('wfTracking', wfTracking); } catch (e) {} }
+// Waterfall history on a CENTER-mode tune: HOLD leaves it where it was
+// painted (the rig's own screen), PAN slides it so frequencies stay aligned.
+// Meaningless on fixed glass, where the window only moves when the rig
+// scrolls it (see shiftWaterfallForFreqChange).
+function setWfHistory(mode, quiet) {
+    wfHistory = mode === 'pan' ? 'pan' : 'hold';
+    var hb = document.getElementById('wfHistHoldBtn'), pb = document.getElementById('wfHistPanBtn');
+    if (hb) hb.classList.toggle('active', wfHistory === 'hold');
+    if (pb) pb.classList.toggle('active', wfHistory === 'pan');
+    // HOLD: nothing slides and nothing pauses, even mid-drag.
+    if (wfHistory === 'hold') { scopeSetVisualPan(0); scopeFreezeDuringDrag = false; }
+    if (!quiet) { try { localStorage.setItem('wfHistory', wfHistory); } catch (e) {} }
+}
+
+// The rig's scope mode (0x27 0x14). CENTER keeps the VFO mid-screen and
+// moves the band under it; FIXED and the SCROLL modes keep the window's
+// edges still and move the marker. We only offer CENTER / FIXED / SCROLL-C
+// (SCROLL-F needs an edge picker we don't have), but any mode the rig
+// reports is rendered: everything other than CENTER is drawn edge-based.
+function populateScopeModes(modes) {
+    availableScopeModes = (modes || []).filter(function(m) { return m.num >= 0 && m.num <= 2; });
+    if (currentPanel === 'span') renderSpanOverlay();
+}
+function setScopeMode(n) {
+    n = n | 0;
+    scopeModePref = n;
+    try { localStorage.setItem('wfScopeMode', String(n)); } catch (e) {}
+    send({ cmd: 'setScopeMode', value: n });
+    if (n === 1) applyFixedWindow();
+}
+
+// Browser-set FIXED window, on rigs whose rig file carries the fixed-edge
+// range table. 'band' covers the ham band the VFO is in; a span index is that
+// width around the VFO. The rig stores it as edge set 3 and switches to it
+// (setScopeEdges), so its own sets 1 and 2 stay as the operator left them.
+function setFixedWindow(choice) {
+    fixedEdgeChoice = choice;
+    applyFixedWindow();
+    if (currentPanel === 'span') renderSpanOverlay();
+}
+function bandLabelOf(hz) {
+    for (var b in BAND_RANGES) { var r = BAND_RANGES[b]; if (hz >= r[0] && hz < r[1]) return b; }
+    return null;
+}
+function applyFixedWindow() {
+    if (!scopeFixedEdges || !(currentFreq > 0)) return;
+    var lower, upper, band = bandLabelOf(currentFreq);
+    if (fixedEdgeChoice === 'band' && band) {
+        lower = BAND_RANGES[band][0]; upper = BAND_RANGES[band][1];
+    } else {
+        // Outside every ham band a BAND pick falls back to the current span's width.
+        var idx = fixedEdgeChoice === 'band' ? currentSpanIndex : fixedEdgeChoice;
+        var half = (idx >= 0 && idx < availableSpans.length) ? availableSpans[idx].freq : 0;
+        if (!(half > 0)) return;
+        lower = Math.max(0, currentFreq - half); upper = currentFreq + half;
+    }
+    fixedWindowOwned = true;
+    scopeFixedBand = band;
+    send({ cmd: 'setScopeEdges', lower: lower, upper: upper });
+}
+// The mode the rig reports, from every sweep's header (and the server's
+// cache). The rig is the truth: a tap here, its own MENU, another browser
+// all land through this path, and the last mode seen is what
+// scopeRigAssert() re-commands on the next connect, so browsers converge
+// instead of fighting over a stale tap.
+function scopeModeReported(m) {
+    m = m & 0xFF;
+    if (m === scopeMode) return;
+    scopeMode = m;
+    scopeModePref = m;
+    try { localStorage.setItem('wfScopeMode', String(m)); } catch (e) {}
+    // New glass: history painted for the old window is meaningless (a CENTER
+    // span can be as wide as the FIXED edges, so the span-change blank would
+    // not fire), the trace snaps, and nothing stays sliding or paused.
+    if (wfImageData) { wfFillBlank(wfImageData.data, 0, wfImageData.data.length); wfBufDirty = true; }
+    spectHold.length = 0;
+    spectShown = null;
+    scopeSetVisualPan(0);
+    scopeFreezeDuringDrag = false;
+    if (m !== 1) { fixedWindowOwned = false; scopeFixedBand = null; }
+    updateScopeModeUi();
+    updateSpanIndex(currentSpanIndex);
+    if (currentPanel === 'span') renderSpanOverlay();
+    if (!spectRenderPending) { spectRenderPending = true; requestAnimationFrame(renderScope); }
+}
+function updateScopeModeUi() {
+    var mg = document.getElementById('scopeModeGrid');
+    if (mg) {
+        for (var i = 0; i < mg.children.length && i < availableScopeModes.length; i++)
+            mg.children[i].classList.toggle('active', availableScopeModes[i].num === scopeMode);
+    }
+    // HIST only matters while the window follows the VFO (CENTER). SPAN picks
+    // the span in CENTER / SCROLL and the window in FIXED (where the rig lets
+    // us write its edges); SCROLL-F and a FIXED we can't set leave it inert.
+    var hr = document.getElementById('wfHistRow'), sr = document.getElementById('spanRow');
+    if (hr) hr.classList.toggle('disabled', scopeMode !== 0);
+    if (sr) sr.classList.toggle('disabled', (scopeMode === 1 && !scopeFixedEdges) || scopeMode === 3);
+}
+// On fixed glass the marker sits at the VFO, so it has to move on every
+// tune, not only when the next sweep lands.
+function scopeRenderOnTune() {
+    if (scopeMode === 0 || spectRenderPending) return;
+    spectRenderPending = true;
+    requestAnimationFrame(renderScope);
 }
 
 // REF: null = AUTO (the rig sits at 0.0 dB and the browser dials the
@@ -7143,6 +7470,9 @@ function stepScopeRef(dir) { setScopeRef((scopeRefDb || 0) + dir * 2.5); }
 function scopeRigAssert() {
     if (scopeRefDb !== null) send({ cmd: 'setScopeRef', value: Math.round(scopeRefDb * 10) });
     send({ cmd: 'setScopeSpeed', value: WF_SPEED_CIV[wfSpeed] });
+    // No pick stored yet: adopt whatever the rig is in (it is reported with
+    // the first sweep and remembered from then on).
+    if (scopeModePref !== null) send({ cmd: 'setScopeMode', value: scopeModePref });
 }
 function updateScopeRefUi() {
     var val = document.getElementById('scopeRefValue');
@@ -7181,10 +7511,14 @@ function resizeCanvases() {
     var seL = document.getElementById('spanEdgeLeft'), seR = document.getElementById('spanEdgeRight');
     if (seL) seL.style.top = spectH + 'px';
     if (seR) seR.style.top = spectH + 'px';
-    spectCanvas.width = Math.round(areaRect.width);
-    spectCanvas.height = spectH;
-    wfCanvas.width = Math.round(areaRect.width);
-    wfCanvas.height = wfH;
+    // Backing stores at device resolution — drawSpectrum / drawWaterfall
+    // keep drawing in CSS px through a setTransform — so a HiDPI screen
+    // doesn't upscale the trace into blocks.
+    scopeDpr = window.devicePixelRatio || 1;
+    spectCanvas.width = Math.round(areaRect.width * scopeDpr);
+    spectCanvas.height = Math.round(spectH * scopeDpr);
+    wfCanvas.width = Math.round(areaRect.width * scopeDpr);
+    wfCanvas.height = Math.round(wfH * scopeDpr);
     if (spectDataLen > 0) initWaterfallBuffer(spectDataLen);
     // Redraw meter for new DPI
     drawMeter();
@@ -7201,7 +7535,9 @@ function resizeCanvases() {
 
 function initWaterfallBuffer(dataLen) {
     var wfCanvas = document.getElementById('waterfallCanvas');
-    var h = wfCanvas.height || 200;
+    // One buffer row per CSS px, not per device px: the scroll speed is
+    // rows per sweep, and a HiDPI canvas must not halve it.
+    var h = Math.round(wfCanvas.height / scopeDpr) || 200;
     var prevImage = wfImageData;
     wfOffCanvas = document.createElement('canvas');
     wfOffCanvas.width = dataLen; wfOffCanvas.height = h;
@@ -7232,27 +7568,46 @@ function handleBinaryMessage(buffer) {
         }
         return;
     }
+    // [0x01][scopeMode][outOfRange][pad][startMHz f32][endMHz f32][pixels]
     if (msgType !== 0x01 || buffer.byteLength < 13) return;
     if (scopeFreezeDuringDrag) return;
     if (scopeDragPendingReset) { scopeDragPendingReset = false; scopeSetVisualPan(0); }
 
+    scopeModeReported(view.getUint8(1));
     prevSpectStartFreq = spectStartFreq;
     prevSpectEndFreq = spectEndFreq;
     spectStartFreq = view.getFloat32(4, true);
     spectEndFreq = view.getFloat32(8, true);
+    // Out of range: the VFO outside a fixed window. The header has a flag
+    // for it, but the IC-7300 never raises it, it just keeps sending full
+    // sweeps of zeros, so the VFO's position is the definition we use.
+    spectOor = view.getUint8(2) === 1 ||
+        (scopeMode !== 0 && currentFreq > 0 && spectEndFreq > spectStartFreq &&
+         (currentFreq < spectStartFreq * 1e6 - 1 || currentFreq > spectEndFreq * 1e6 + 1));
     spectData = new Uint8Array(buffer, 12);
     if (spectData.length !== spectDataLen) { spectDataLen = spectData.length; initWaterfallBuffer(spectDataLen); }
 
-    // Update scope edge labels
+    // Update scope edge labels: offsets from the VFO in CENTER, the window's
+    // own edges once the glass is fixed.
     if (spectStartFreq > 0 && spectEndFreq > spectStartFreq) {
-        var halfSpan = (spectEndFreq - spectStartFreq) / 2;
-        document.getElementById('spanEdgeLeft').textContent = '-' + (halfSpan * 1000).toFixed(0);
-        document.getElementById('spanEdgeRight').textContent = '+' + (halfSpan * 1000).toFixed(0);
+        var seL = document.getElementById('spanEdgeLeft'), seR = document.getElementById('spanEdgeRight');
+        if (scopeMode === 0) {
+            var halfSpan = (spectEndFreq - spectStartFreq) / 2;
+            seL.textContent = '-' + (halfSpan * 1000).toFixed(0);
+            seR.textContent = '+' + (halfSpan * 1000).toFixed(0);
+        } else {
+            seL.textContent = spectStartFreq.toFixed(3);
+            seR.textContent = spectEndFreq.toFixed(3);
+        }
+        if ((scopeMode === 1 || scopeMode === 3) &&
+            (spectStartFreq !== prevSpectStartFreq || spectEndFreq !== prevSpectEndFreq)) updateSpanIndex(currentSpanIndex);
     }
 
     shiftWaterfallForFreqChange();
     updateWaterfallRow();
-    spectUpdateHold();
+    // Out of range carries no signal: paint the blank rows, but don't let a
+    // zero floor drive AUTO REF or the peak hold, and don't ease into it.
+    if (spectOor) spectHold.length = 0; else spectUpdateHold();
     spectBeginTween();
     if (!spectRenderPending) { spectRenderPending = true; requestAnimationFrame(renderScope); }
 }
@@ -7268,9 +7623,12 @@ function shiftWaterfallForFreqChange() {
         wfFillBlank(d, 0, d.length);
         return;
     }
-    // FIXED leaves the history where it was painted (the rig's own behaviour);
-    // only TRACK pans it so the frequencies still in view stay aligned.
-    if (wfTracking !== 'track') return;
+    // CENTER: the window follows the VFO, so a tune moves the band under the
+    // marker. HOLD leaves the history where it was painted (the rig's own
+    // behaviour); PAN slides it so the frequencies still in view stay
+    // aligned. On fixed glass the edges only move when the rig scrolls the
+    // window (SCROLL modes), and then the history has to come along.
+    if (scopeMode === 0 && wfHistory !== 'pan') return;
     var shiftPixels = Math.round((prevSpectStartFreq - spectStartFreq) / curSpan * w);
     if (shiftPixels === 0) return;
     var absShift = Math.min(Math.abs(shiftPixels), w);
@@ -7318,7 +7676,7 @@ function wfUpdateAutoRef() {
 
 function updateWaterfallRow() {
     if (!wfImageData || !spectData) return;
-    wfUpdateAutoRef();
+    if (!spectOor) wfUpdateAutoRef();
     var w = wfImageData.width, d = wfImageData.data, len = spectData.length;
     // SPEED: n rows per sweep. Row 0 is the new sweep; the rows under it
     // blend toward the previous sweep so the scroll stays smooth.
@@ -7365,7 +7723,7 @@ function spectBeginTween() {
     }
     spectTweenMs = Math.max(60, Math.min(300, scopeSweepGapMs * 0.85));
     spectLastSweepAt = now;
-    var jump = !spectShown || spectShown.length !== len ||
+    var jump = !spectShown || spectShown.length !== len || spectOor ||
         spectStartFreq !== prevSpectStartFreq || spectEndFreq !== prevSpectEndFreq;
     if (jump) {
         spectShown = Float32Array.from(spectData);
@@ -7415,9 +7773,10 @@ function renderScope() {
 function drawSpectrum() {
     var canvas = document.getElementById('spectrumCanvas');
     var ctx = canvas.getContext('2d');
-    var w = canvas.width, h = canvas.height, len = spectData.length;
+    var w = canvas.width / scopeDpr, h = canvas.height / scopeDpr, len = spectData.length;
     var labelH = 14, plotH = h - labelH;
 
+    ctx.setTransform(scopeDpr, 0, 0, scopeDpr, 0, 0);
     ctx.clearRect(0, 0, w, h);
     ctx.fillStyle = '#05070c';
     ctx.fillRect(0, 0, w, h);
@@ -7434,8 +7793,8 @@ function drawSpectrum() {
     // the tracked noise floor seated AT the axis like the rig's own trace:
     // the lower half of the band noise sits below it, only the noise peaks
     // poke up as grass with dark gaps between them, and a manual REF
-    // nudges the whole thing (see spectRefShiftDb). Bars rise from the
-    // axis — nothing solid is painted under the grass.
+    // nudges the whole thing (see spectRefShiftDb). The trace rises from
+    // the axis — nothing solid is painted under the grass.
     var floor = wfEmaFloor + 2 - spectRefShiftDb() * spectCountsPerDb();
     var stepX = w / len;
     function barY(amp) {
@@ -7444,39 +7803,45 @@ function drawSpectrum() {
         return plotH * (1 - 0.94 * t);
     }
 
-    // Grey peak-hold afterglow behind the trace
-    if (spectHold.length > 1) {
-        ctx.fillStyle = 'rgba(102,112,122,0.55)';
+    // Filled outline through the bin centres. The rig sends one value per
+    // bin, so straight segments between neighbours are the honest picture
+    // at any canvas width; flat per-bin bars turn into a staircase (and
+    // ragged half-pixel edges) as soon as a bin is wider than a pixel.
+    function fillTrace(vals) {
         ctx.beginPath();
-        for (var hi = 0; hi < len; hi++) {
-            var peak = 0;
-            for (var hs = 0; hs < spectHold.length; hs++) {
-                var hd = spectHold[hs].data;
-                if (hd.length === len && hd[hi] > peak) peak = hd[hi];
-            }
-            var hy = barY(peak);
-            ctx.rect(hi * stepX, hy, stepX, plotH - hy);
-        }
+        ctx.moveTo(0, plotH);
+        ctx.lineTo(0, barY(vals[0]));
+        for (var i = 0; i < len; i++) ctx.lineTo((i + 0.5) * stepX, barY(vals[i]));
+        ctx.lineTo(w, barY(vals[len - 1]));
+        ctx.lineTo(w, plotH);
+        ctx.closePath();
         ctx.fill();
     }
 
-    // The live sweep, one solid bar per bin like the rig's own trace — the
-    // bar texture IS the per-bin grass. Eased toward the newest sweep
-    // between arrivals (spectAdvanceTween); no smoothing across bins.
+    // Grey peak-hold afterglow behind the trace: per-bin maxima of the held sweeps
+    if (spectHold.length > 1) {
+        var peak = new Uint8Array(len);
+        for (var hs = 0; hs < spectHold.length; hs++) {
+            var hd = spectHold[hs].data;
+            if (hd.length !== len) continue;
+            for (var hi = 0; hi < len; hi++) if (hd[hi] > peak[hi]) peak[hi] = hd[hi];
+        }
+        ctx.fillStyle = 'rgba(102,112,122,0.55)';
+        fillTrace(peak);
+    }
+
+    // The live sweep, eased toward the newest sweep between arrivals
+    // (spectAdvanceTween). The per-bin zigzag IS the grass: nothing is
+    // smoothed across bins, only drawn between them.
     var easing = spectAdvanceTween();
     ctx.fillStyle = 'rgb(237,242,247)';
-    ctx.beginPath();
-    for (var i = 0; i < len; i++) {
-        var by = barY(spectShown[i]);
-        ctx.rect(i * stepX, by, stepX, plotH - by);
-    }
-    ctx.fill();
+    fillTrace(spectShown);
 
-    // Passband indicator bar (anchored to spectrum center, independent of currentFreq)
-    if (currentFilterWidth > 0 && spectStartFreq > 0 && spectEndFreq > spectStartFreq) {
+    // Passband indicator bar, hung off the VFO marker
+    var cx = scopeIndicatorX(w);
+    if (currentFilterWidth > 0 && spectStartFreq > 0 && spectEndFreq > spectStartFreq && isFinite(cx)) {
         var spanHz = (spectEndFreq - spectStartFreq) * 1e6;
         var bwPx = (currentFilterWidth / spanHz) * w;
-        var cx = scopeIndicatorCenterX(w);
         var pbLeft, pbRight;
         if (currentMode === 'USB' || currentMode === 'RTTY') {
             pbLeft = cx; pbRight = cx + bwPx;
@@ -7497,21 +7862,34 @@ function drawSpectrum() {
         }
     }
 
-    // Frequency marker (IC-7300 style: white triangle + vertical line, anchored to center)
-    if (spectStartFreq > 0 && spectEndFreq > spectStartFreq) {
-        var fxPos = scopeIndicatorCenterX(w);
-        // Vertical line
-        ctx.strokeStyle = 'rgba(255,255,255,0.3)';
-        ctx.lineWidth = 1;
-        ctx.beginPath(); ctx.moveTo(fxPos, 0); ctx.lineTo(fxPos, plotH); ctx.stroke();
-        // White triangle at bottom
-        ctx.fillStyle = '#fff';
-        ctx.beginPath();
-        ctx.moveTo(fxPos - 5, plotH);
-        ctx.lineTo(fxPos + 5, plotH);
-        ctx.lineTo(fxPos, plotH - 7);
-        ctx.closePath();
-        ctx.fill();
+    // Frequency marker (IC-7300 style: white triangle + vertical line at the VFO;
+    // mid-screen in CENTER, wherever the VFO sits inside a fixed window otherwise)
+    if (spectStartFreq > 0 && spectEndFreq > spectStartFreq && isFinite(cx)) {
+        var fxPos = cx;
+        if (fxPos >= 0 && fxPos <= w) {
+            // Vertical line
+            ctx.strokeStyle = 'rgba(255,255,255,0.3)';
+            ctx.lineWidth = 1;
+            ctx.beginPath(); ctx.moveTo(fxPos, 0); ctx.lineTo(fxPos, plotH); ctx.stroke();
+            // White triangle at bottom
+            ctx.fillStyle = '#fff';
+            ctx.beginPath();
+            ctx.moveTo(fxPos - 5, plotH);
+            ctx.lineTo(fxPos + 5, plotH);
+            ctx.lineTo(fxPos, plotH - 7);
+            ctx.closePath();
+            ctx.fill();
+        } else {
+            // The VFO left a FIXED window: a chevron on the side it went to.
+            var dir = fxPos < 0 ? -1 : 1, ex = dir < 0 ? 2 : w - 2, ey = plotH - 4;
+            ctx.fillStyle = '#fff';
+            ctx.beginPath();
+            ctx.moveTo(ex - dir * 8, ey - 6);
+            ctx.lineTo(ex, ey);
+            ctx.lineTo(ex - dir * 8, ey + 6);
+            ctx.closePath();
+            ctx.fill();
+        }
     }
 
     // Freq labels
@@ -7520,6 +7898,9 @@ function drawSpectrum() {
         ctx.font = '9px sans-serif';
         ctx.textAlign = 'center'; ctx.textBaseline = 'top';
         for (var li = 0; li <= 5; li++) {
+            // On fixed glass the corner labels would sit under the edge
+            // readouts (spanEdgeLeft/Right show the exact edges there).
+            if (scopeMode !== 0 && (li === 0 || li === 5)) continue;
             var frac = li / 5;
             var freq = spectStartFreq + (spectEndFreq - spectStartFreq) * frac;
             var label = freq >= 1000 ? freq.toFixed(1) : freq >= 100 ? freq.toFixed(2) : freq.toFixed(3);
@@ -7533,7 +7914,8 @@ function drawWaterfall() {
     if (!wfImageData || !wfOffCtx) return false;
     var canvas = document.getElementById('waterfallCanvas');
     var ctx = canvas.getContext('2d');
-    var w = canvas.width, h = canvas.height;
+    var w = canvas.width / scopeDpr, h = canvas.height / scopeDpr;
+    ctx.setTransform(scopeDpr, 0, 0, scopeDpr, 0, 0);
     if (wfBufDirty) { wfOffCtx.putImageData(wfImageData, 0, 0); wfBufDirty = false; }
     // Slide: how far into the current sweep interval we are decides how far
     // down the picture has drifted (0 .. rows-per-sweep). Bilinear so the
@@ -7547,11 +7929,11 @@ function drawWaterfall() {
     // until the next sweep's rows replace it in place.
     if (offset > 0) ctx.drawImage(wfOffCanvas, 0, 0, wfImageData.width, 1, 0, 0, w, offset + 0.5);
 
-    // Passband indicator bar (anchored to spectrum center)
-    if (currentFilterWidth > 0 && spectStartFreq > 0 && spectEndFreq > spectStartFreq) {
+    // Passband indicator bar, hung off the VFO marker
+    var cx = scopeIndicatorX(w);
+    if (currentFilterWidth > 0 && spectStartFreq > 0 && spectEndFreq > spectStartFreq && isFinite(cx)) {
         var spanHz = (spectEndFreq - spectStartFreq) * 1e6;
         var bwPx = (currentFilterWidth / spanHz) * w;
-        var cx = scopeIndicatorCenterX(w);
         var pbL, pbR;
         if (currentMode === 'USB' || currentMode === 'RTTY') {
             pbL = cx; pbR = cx + bwPx;
@@ -7572,12 +7954,11 @@ function drawWaterfall() {
         }
     }
 
-    // Frequency indicator (anchored to center)
-    if (spectStartFreq > 0 && spectEndFreq > spectStartFreq) {
-        var xPos = scopeIndicatorCenterX(w);
+    // Frequency indicator (at the VFO, see scopeIndicatorX)
+    if (spectStartFreq > 0 && spectEndFreq > spectStartFreq && cx >= 0 && cx <= w) {
         ctx.strokeStyle = 'rgba(255,255,255,0.25)';
         ctx.lineWidth = 1;
-        ctx.beginPath(); ctx.moveTo(xPos, 0); ctx.lineTo(xPos, h); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(cx, 0); ctx.lineTo(cx, h); ctx.stroke();
     }
     return p < 1;
 }
@@ -7588,7 +7969,8 @@ function scopeFreqFromClientX(target, clientX) {
     if (rect.width <= 0) return 0;
     var frac = (clientX - rect.left) / rect.width;
     frac = Math.max(0, Math.min(1, frac));
-    return Math.round((spectStartFreq + (spectEndFreq - spectStartFreq) * frac) * 1e6);
+    // Scope tuning lands on 100 Hz steps, like a drag (scopeFreqFromDragDeltaX).
+    return Math.round((spectStartFreq + (spectEndFreq - spectStartFreq) * frac) * 1e6 / 100) * 100;
 }
 
 function scopeSetVisualPan(px) {
@@ -7611,9 +7993,51 @@ function scopeFreqFromDragDeltaX(deltaX) {
     return Math.max(100, Math.round((scopeDragStartFreq - deltaX * hzPerPx) / 100) * 100);
 }
 
-function scopeIndicatorCenterX(w) {
-    // Canvases are translated while dragging; compensate so center indicators stay fixed.
-    return w / 2 - scopeDragVisualOffsetX;
+// X of the VFO on the glass. CENTER pins it mid-screen (compensating the
+// canvas translate of a PAN drag); the other modes place it inside the
+// window's fixed edges, following the finger during a drag so it doesn't
+// trail the polled frequency. NaN when there is no VFO to place.
+function scopeIndicatorX(w) {
+    if (scopeMode === 0) return w / 2 - scopeDragVisualOffsetX;
+    var f = (scopeDragActive && scopeDragFreq > 0) ? scopeDragFreq : currentFreq;
+    if (!(f > 0) || !(spectEndFreq > spectStartFreq)) return NaN;
+    return (f / 1e6 - spectStartFreq) / (spectEndFreq - spectStartFreq) * w;
+}
+
+// Frequency a drag position means. CENTER: the band slides under the fixed
+// marker, so a left pull raises the frequency by the pixels moved. On fixed
+// glass the finger drags the marker itself, so whatever is under it is the
+// frequency, like a continuous tap.
+function scopeDragTuneFreq(clientX, deltaX, release) {
+    if (scopeMode === 0) return scopeFreqFromDragDeltaX(deltaX);
+    if (scopeDragRectWidth <= 0 || !(spectEndFreq > spectStartFreq)) return 0;
+    var frac = (clientX - scopeDragRectLeft) / scopeDragRectWidth;
+    if (scopeMode === 2 || scopeMode === 3) {
+        // The rig only scrolls once the VFO is past an edge, and a finger can't
+        // leave the glass: pulling the marker into the last 1.5% pushes it 2%
+        // over and the rig pages the window. That is one page per touch of
+        // the edge: until the finger comes back inside, nothing more is sent,
+        // not on later moves (a parked finger would page again and again) and
+        // not on release (the new edges arrive with the next sweep, so the
+        // release position would still map into the OLD window and tune the
+        // VFO straight back, scrolling the rig back where it came from).
+        if (scopeDragPaged) {
+            if (frac > 0.05 && frac < 0.95) scopeDragPaged = false;
+            else return 0;
+        }
+        if (release) {
+            frac = Math.max(0, Math.min(1, frac));
+        } else if (frac >= 0.985) {
+            frac = Math.max(frac, 1.02); scopeDragPaged = true;
+        } else if (frac <= 0.015) {
+            frac = Math.min(frac, -0.02); scopeDragPaged = true;
+        }
+    } else {
+        frac = Math.max(0, Math.min(1, frac));
+    }
+    var f = Math.round((spectStartFreq + (spectEndFreq - spectStartFreq) * frac) * 1e6 / 100) * 100;
+    if (f > 0) scopeDragFreq = f;
+    return f;
 }
 
 function scopeClick(e) {
@@ -7639,6 +8063,8 @@ function scopePointerDown(e) {
     scopeDragCanvas = e.currentTarget;
     scopeDragStartX = e.clientX;
     scopeDragStartFreq = currentFreq;
+    scopeDragFreq = 0;
+    scopeDragPaged = false;
     scopeDragLastTuneTime = 0;
     scopeDragMoveHistory = [];
 
@@ -7646,10 +8072,10 @@ function scopePointerDown(e) {
     scopeDragRectLeft = rect.left;
     scopeDragRectWidth = rect.width;
     scopeSetVisualPan(0);
-    // TRACK grabs the band: the canvases slide under the finger and the
-    // sweeps pause until release. FIXED is the rig's glass — it never moves
-    // and never stops, the drag only turns the dial.
-    scopeFreezeDuringDrag = (wfTracking === 'track');
+    // CENTER + PAN grabs the band: the canvases slide under the finger and
+    // the sweeps pause until release. Otherwise this is the rig's glass — it
+    // never moves and never stops, the drag only turns the dial.
+    scopeFreezeDuringDrag = (scopeMode === 0 && wfHistory === 'pan');
 
     if (scopeDragCanvas.setPointerCapture) {
         try { scopeDragCanvas.setPointerCapture(e.pointerId); } catch (err) {}
@@ -7673,11 +8099,11 @@ function scopePointerMove(e) {
         scopeDragMoved = true;
     }
 
-    if (wfTracking === 'track') scopeSetVisualPan(deltaX);
+    if (scopeMode === 0 && wfHistory === 'pan') scopeSetVisualPan(deltaX);
 
     if (scopeDragMoved) {
         if (now - scopeDragLastTuneTime >= 35) {
-            var dragFreq = scopeFreqFromDragDeltaX(deltaX);
+            var dragFreq = scopeDragTuneFreq(e.clientX, deltaX);
             if (dragFreq > 0) send({ cmd: 'setFrequency', value: dragFreq });
             scopeDragLastTuneTime = now;
         }
@@ -7707,7 +8133,7 @@ function scopePointerEnd(e, commitTune) {
             if (scopeDragMoveHistory[i].t <= wobbleCutoff) { finalDeltaX = scopeDragMoveHistory[i].dx; break; }
         }
     }
-    var finalDragFreq = scopeFreqFromDragDeltaX(finalDeltaX);
+    var finalDragFreq = scopeDragTuneFreq(scopeDragStartX + finalDeltaX, finalDeltaX, true);
     var finalClickFreq = scopeFreqFromClientX(targetCanvas, e.clientX);
 
     scopeDragActive = false;
@@ -7715,6 +8141,8 @@ function scopePointerEnd(e, commitTune) {
     scopeDragPointerId = null;
     scopeDragCanvas = null;
     scopeDragStartFreq = 0;
+    scopeDragFreq = 0;
+    scopeDragPaged = false;
     scopeDragMoveHistory = [];
     scopeDragRectLeft = 0;
     scopeDragRectWidth = 0;
@@ -7765,8 +8193,15 @@ document.addEventListener('keydown', function(e) {
     if (macroEditor && macroEditor.style.display !== 'none') return;
 
     if (e.key === 'l' || e.key === 'L') { e.preventDefault(); openLogModal(); }
-    else if (e.key === 'ArrowUp' || e.key === '+') { e.preventDefault(); tuneUp(); }
-    else if (e.key === 'ArrowDown' || e.key === '-') { e.preventDefault(); tuneDown(); }
+    else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+        e.preventDefault();
+        // Shift (or Ctrl) + arrow tunes in 10 kHz jumps (#120). Only the arrows
+        // honour the modifier: '+' is itself typed with Shift on most layouts.
+        var step = (e.shiftKey || e.ctrlKey) ? FAST_TUNE_STEP : tuneStep;
+        if (e.key === 'ArrowUp') tuneUp(step); else tuneDown(step);
+    }
+    else if (e.key === '+') { e.preventDefault(); tuneUp(); }
+    else if (e.key === '-') { e.preventDefault(); tuneDown(); }
     else if (e.key === 'ArrowRight') { e.preventDefault(); tuneUpHz(); }
     else if (e.key === 'ArrowLeft') { e.preventDefault(); tuneDownHz(); }
     else if (e.key === 'Escape') {
@@ -8605,6 +9040,10 @@ function digiSetPane(pane) {
         var u = document.getElementById('digiDirectedUnread');
         if (u) u.textContent = '';
     }
+    // Rows appended while a pane was hidden couldn't scroll it (display:none
+    // has no scrollHeight), so jump to the newest row now that it's visible.
+    var p = document.getElementById(pane === 'rx' ? 'digiRxPanel' : 'digiDirectedPanel');
+    if (p) p.scrollTop = p.scrollHeight;
 }
 // Badge the DIRECTED tab when a row lands there while another pane is up.
 (function () {
@@ -8812,6 +9251,19 @@ function updateDigiRxFreqDisplay() {
     drawDigiWaterfall();
 }
 
+// Move the RX/TX markers the WSJT-X way. Plain click: RX, and TX unless Hold TX.
+// Shift: TX only (overrides Hold TX — explicit intent). Ctrl/Cmd: RX only.
+// `ev` may be undefined (programmatic callers) → behaves as a plain click.
+function digiApplyClickFreq(freq, ev) {
+    if (!(freq >= 200 && freq <= 3000)) return;
+    var shift = !!(ev && ev.shiftKey);
+    var ctrl = !!(ev && (ev.ctrlKey || ev.metaKey));
+    var moveTx = shift || (!ctrl && !digiHoldTxFreq);
+    var moveRx = !shift;
+    if (moveTx) { digiTxFreq = freq; updateDigiTxFreqDisplay(); }
+    if (moveRx) { digiRxFreq = freq; updateDigiRxFreqDisplay(); }
+}
+
 // FT4: 4 tones × 12.5 Hz → center at +18.75 Hz above base
 function digiCenterOffset() {
     return digiMode === 'FT8' ? 3.5 * 6.25 : 1.5 * 12.5;
@@ -8875,6 +9327,7 @@ function updateDigiStatus(text, cls) {
 // Shared result handler used by both the worker path and the sync fallback path.
 function onFt8DecodeResult(results, decodedSlotIndex) {
     digiDecodeInProgress = false; // unblock TX now that results are in
+    loadWorkedIndex();
     results.sort(function(a, b) { return b.snr - a.snr; }); // strongest signal first
     var now = new Date();
     var timeStr = now.toISOString().substr(11, 8); // HH:MM:SS
@@ -9024,6 +9477,117 @@ function triggerDigiDecode() {
     }
 }
 
+// ---- DXCC entity + worked-before hints ------------------------------------
+// dxcc.js maps a callsign to its DXCC entity; the logbook says what has been
+// worked.  Each decode row gets the sender's entity (desktop-only column), a
+// gold star for a never-worked entity, a silver one for an entity not yet
+// worked on the current band, and a dimmed message for a station already
+// worked on this band.  Both hints are optional (Station Settings).
+var digiShowEntity = true;
+var digiWorkedHints = true;
+try {
+    digiShowEntity = localStorage.getItem('digiEntityCol') !== '0';
+    digiWorkedHints = localStorage.getItem('digiWorkedHints') !== '0';
+} catch(e) {}
+var digiWorked = { calls: {}, ents: {} };   // CALL -> {BAND: 1}, entity name -> {BAND: 1}
+var digiWorkedReady = false;                // false until the logbook has been folded in
+
+function digiWorkedReset() { digiWorked = { calls: {}, ents: {} }; }
+
+function digiWorkedAdd(call, band) {
+    call = (call || '').toUpperCase().trim();
+    if (!call) return;
+    band = (band || '').toUpperCase() || '?';
+    (digiWorked.calls[call] = digiWorked.calls[call] || {})[band] = 1;
+    var e = window.dxccLookup ? dxccLookup(call) : null;
+    if (e) (digiWorked.ents[e.name] = digiWorked.ents[e.name] || {})[band] = 1;
+}
+
+// The sender of a decoded FT8/FT4 message ("CQ [mod] CALL GRID", "A B rpt"),
+// or '' when the message has none we can trust (free text, telemetry).
+function digiSenderCall(msg) {
+    var parts = (msg || '').trim().toUpperCase().split(/\s+/);
+    var tok = '';
+    if (parts[0] === 'CQ' || parts[0] === 'QRZ' || parts[0] === 'DE') {
+        // Skip modifiers without digits (DX, POTA, FD...) and grids (FN42).
+        for (var p = 1; p < parts.length; p++) {
+            if (/\d/.test(parts[p]) && !/^[A-R]{2}\d{2}$/.test(parts[p])) { tok = parts[p]; break; }
+        }
+    } else if (parts.length >= 2) {
+        tok = parts[1];
+    }
+    return tok.replace(/^<(.*)>$/, '$1');
+}
+
+// Hints for one decode: sender call, its entity, which star (if any) and
+// whether the station is already in the log on the current band.
+function digiDecodeHints(msg) {
+    var out = { call: '', ent: null, star: '', worked: false, title: '' };
+    if (!window.dxccLookup) return out;
+    out.call = digiSenderCall(msg);
+    if (!out.call) return out;
+    out.ent = dxccLookup(out.call);
+    if (!digiWorkedHints || !digiWorkedReady) return out;
+    var band = freqToBand(vfoAFreq || currentFreq || 0) || '?';
+    var wc = digiWorked.calls[out.call];
+    out.worked = !!(wc && wc[band]);
+    if (out.ent) {
+        var we = digiWorked.ents[out.ent.name];
+        if (!we) {
+            out.star = 'new-one';
+            out.title = 'New one: ' + out.ent.name + ' has never been worked';
+        } else if (!we[band]) {
+            out.star = 'new-band';
+            out.title = 'New on ' + band + ': ' + out.ent.name + ' worked before, but not on this band';
+        }
+    }
+    return out;
+}
+
+function digiHintSpans(h) {
+    var s = '';
+    if (h.star) s += '<span class="digi-decode-star ' + h.star + '" title="' + escapeHtml(h.title) + '">&#9733;</span>';
+    if (h.ent) s += '<span class="digi-decode-ent" title="' + escapeHtml(h.ent.name + ' (' + h.ent.prefix + ')') + '">' + escapeHtml(h.ent.name) + '</span>';
+    return s;
+}
+
+function applyDigiHintPrefs() {
+    ['digiRxPanel', 'digiDirectedPanel'].forEach(function(id) {
+        var el = document.getElementById(id);
+        if (el) el.classList.toggle('no-entity', !digiShowEntity);
+    });
+    var hide = document.querySelector('.digi-ent-hide');
+    if (hide) hide.style.display = digiShowEntity ? '' : 'none';
+    var c1 = document.getElementById('digiEntityCol');
+    var c2 = document.getElementById('digiWorkedHints');
+    if (c1) c1.checked = digiShowEntity;
+    if (c2) c2.checked = digiWorkedHints;
+}
+
+function setDigiEntityCol(on) {
+    digiShowEntity = !!on;
+    try { localStorage.setItem('digiEntityCol', on ? '1' : '0'); } catch(e) {}
+    applyDigiHintPrefs();
+}
+
+function setDigiWorkedHints(on) {
+    digiWorkedHints = !!on;
+    try { localStorage.setItem('digiWorkedHints', on ? '1' : '0'); } catch(e) {}
+    applyDigiHintPrefs();
+    renderDigiDecodes();
+}
+
+// Standalone build: the logbook is the browser's own (at most a few hundred
+// QSOs), so rebuild the summary before every render.
+function loadWorkedIndex() {
+    digiWorkedReset();
+    for (var i = 0; i < qsoLog.length; i++) {
+        var q = qsoLog[i];
+        if (q && q.call) digiWorkedAdd(q.call, q.band || freqToBand(q.freq || 0));
+    }
+    digiWorkedReady = true;
+}
+
 function renderDigiDecodes() {
     var panel = document.getElementById('digiRxPanel');
     if (!panel) return;
@@ -9043,14 +9607,15 @@ function renderDigiDecodes() {
         var rparts = d.msg.trim().split(/\s+/);
         var isDirected = myCall && rparts.length >= 2 && rparts[0].toUpperCase() === myCall.toUpperCase();
         var isMentioned = !isDirected && myCall && d.msg.toUpperCase().indexOf(myCall) >= 0;
-        var rowCls = 'digi-decode-row' + (isCq ? ' cq-row' : '') + (isDirected ? ' directed' : isMentioned ? ' highlight' : '');
+        var hints = digiDecodeHints(d.msg);
+        var rowCls = 'digi-decode-row' + (isCq ? ' cq-row' : '') + (isDirected ? ' directed' : isMentioned ? ' highlight' : '') + (hints.worked ? ' worked' : '');
         var snrStr = (d.snr >= 0 ? '+' : '') + d.snr.toFixed(0);
         var dtStr  = (d.dt  >= 0 ? '+' : '') + d.dt.toFixed(1);
-        html += '<div class="' + rowCls + '" data-msg="' + encodeURIComponent(d.msg) + '" data-slot="' + (d.slotIndex || 0) + '" data-freq="' + Math.round(d.freq) + '" data-snr="' + d.snr + '" onclick="digiRowClick(this)" ondblclick="digiRowDblClick(this)">' +
+        html += '<div class="' + rowCls + '" data-msg="' + encodeURIComponent(d.msg) + '" data-slot="' + (d.slotIndex || 0) + '" data-freq="' + Math.round(d.freq) + '" data-snr="' + d.snr + '" onclick="digiRowClick(this, event)" ondblclick="digiRowDblClick(this, event)">' +
             '<span class="digi-decode-snr">'  + snrStr + '</span>' +
             '<span class="digi-decode-dt">'   + dtStr  + '</span>' +
             '<span class="digi-decode-freq">'  + Math.round(d.freq) + '</span>' +
-            '<span class="digi-decode-msg">'   + escapeHtml(d.msg) + '</span>' +
+            '<span class="digi-decode-msg">'   + escapeHtml(d.msg) + '</span>' + digiHintSpans(hints) +
             '</div>';
     }
     panel.innerHTML = html;
@@ -9095,8 +9660,8 @@ function replaceDigiTransmittingRow(id, d) {
     div.setAttribute('data-msg', encodeURIComponent(d.msg));
     div.setAttribute('data-freq', Math.round(d.freq));
     div.setAttribute('data-snr', d.snr);
-    div.onclick = function() { digiRowClick(this); };
-    div.ondblclick = function() { digiRowDblClick(this); };
+    div.onclick = function(e) { digiRowClick(this, e); };
+    div.ondblclick = function(e) { digiRowDblClick(this, e); };
     div.innerHTML =
         '<span class="digi-decode-snr">TX</span>' +
         '<span class="digi-decode-dt"></span>' +
@@ -9117,20 +9682,21 @@ function appendDigiDirectedRow(d, isTx) {
     var dMyCall = getMyCall();
     var dParts = (d.msg || '').trim().toUpperCase().split(/\s+/);
     var dDirected = !isTx && dMyCall && dParts.length >= 2 && dParts[0] === dMyCall.toUpperCase();
-    var rowCls = 'digi-decode-row ' + (isTx ? 'tx-row' : (dDirected ? 'directed' : 'highlight'));
+    var dHints = isTx ? { star: '', ent: null, worked: false } : digiDecodeHints(d.msg);
+    var rowCls = 'digi-decode-row ' + (isTx ? 'tx-row' : (dDirected ? 'directed' : 'highlight')) + (dHints.worked ? ' worked' : '');
     var div = document.createElement('div');
     div.className = rowCls;
     div.setAttribute('data-msg', encodeURIComponent(d.msg));
     div.setAttribute('data-freq', Math.round(d.freq));
     div.setAttribute('data-snr', d.snr);
     div.setAttribute('data-slot', d.slotIndex || 0);
-    div.onclick = function() { digiRowClick(this); };
-    div.ondblclick = function() { digiRowDblClick(this); };
+    div.onclick = function(e) { digiRowClick(this, e); };
+    div.ondblclick = function(e) { digiRowDblClick(this, e); };
     div.innerHTML =
         '<span class="digi-decode-snr">'   + snrStr  + '</span>' +
         '<span class="digi-decode-dt">'    + dtStr   + '</span>' +
         '<span class="digi-decode-freq">'  + freqStr + '</span>' +
-        '<span class="digi-decode-msg">'   + escapeHtml(d.msg) + '</span>';
+        '<span class="digi-decode-msg">'   + escapeHtml(d.msg) + '</span>' + digiHintSpans(dHints);
     panel.appendChild(div);
     panel.scrollTop = panel.scrollHeight;
 }
@@ -9139,7 +9705,7 @@ function escapeHtml(s) {
     return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
 
-function digiRowClick(el) {
+function digiRowClick(el, ev) {
     if (!checkDigiCallGrid()) return;
     var msg = decodeURIComponent(el.getAttribute('data-msg') || '');
     var slotIndex = parseInt(el.getAttribute('data-slot') || '-1', 10);
@@ -9151,13 +9717,8 @@ function digiRowClick(el) {
     // Ignore clicks on our own transmissions (FROM = parts[1])
     var fromCall = /^CQ$/i.test(parts[0]) ? (parts.length >= 3 ? parts[parts.length - 2] : parts[1]) : parts[1];
     if (myCall && fromCall && fromCall.toUpperCase() === myCall.toUpperCase()) return;
-    // Set TX and RX frequency to match clicked station (unless Hold is enabled)
-    if (freq >= 200 && freq <= 3000 && !digiHoldTxFreq) {
-        digiTxFreq = freq;
-        digiRxFreq = freq;
-        updateDigiTxFreqDisplay();
-        updateDigiRxFreqDisplay();
-    }
+    // Move the markers to the clicked station (RX always, TX unless Hold TX; Shift = TX only)
+    digiApplyClickFreq(freq, ev);
     if (digiContestMode === 'FD') {
         if (!digiFdReady()) { updateDigiStatus('Set FD class/section', ''); updateDigiMsgRows(); return; }
         digiFdRowClick(parts, slotIndex, dxEl);
@@ -9179,7 +9740,8 @@ function digiRowClick(el) {
             var dxCall73 = parts[1].toUpperCase();
             if (dxEl) dxEl.value = dxCall73;
             digiQsoPartner = dxCall73;
-            digiQsoState = 'IDLE';
+            digiQsoPartnerBusyWith = '';
+            digiQsoState = 'CALLING';
             digiTheirReport = '';
             armMessageForQsoState(slotIndex);
             updateDigiMsgRows();
@@ -9193,6 +9755,7 @@ function digiRowClick(el) {
         // Message is addressed to us when parts[0] matches MY CALL
         var msgToMe = myCall && parts[0].toUpperCase() === myCall.toUpperCase();
         if (msgToMe) {
+            digiQsoPartnerBusyWith = '';
             var roundedSnr = Math.round(snr);
             var ourSnrStr = (roundedSnr >= 0 ? '+' : '') + roundedSnr;
             if (/\bRR73\b/i.test(msg) || /\bRRR\b/i.test(msg)) {
@@ -9217,8 +9780,10 @@ function digiRowClick(el) {
                 digiOurReport = ourSnrStr;  // our SNR of them → Tx2 plain report
             }
         } else {
-            // Message not to us — just target that station from IDLE
-            digiQsoState = 'IDLE';
+            // Message not to us (tail-end): call them, and remember who they are
+            // working so the CALLING auto-desist lets them finish that QSO (#115).
+            digiQsoState = 'CALLING';
+            digiQsoPartnerBusyWith = parts[0].toUpperCase();
             digiTheirReport = '';
         }
         // Arm appropriate message based on state
@@ -9228,7 +9793,7 @@ function digiRowClick(el) {
 }
 
 // Double-click on a DECODE row (All Decodes / Directed): run click logic then enable TX + arm.
-function digiRowDblClick(el) {
+function digiRowDblClick(el, ev) {
     if (!checkDigiCallGrid()) return;
     // If a transmission is already in progress, abort it transparently so the
     // new selection takes over immediately (same slot if phase allows).
@@ -9246,7 +9811,7 @@ function digiRowDblClick(el) {
         // correct-parity slot.
         digiSwitchAbortedSlot = getDigiSlotInfo().slotIndex;
     }
-    digiRowClick(el); // sets DX, queues message, updates state
+    digiRowClick(el, ev); // sets DX, queues message, updates state
     if (!digiTxEnabled) {
         digiTxEnabled = true;
         var etb = document.getElementById('digiEnableTxBtn');
@@ -9538,6 +10103,12 @@ function digiMsgArm(step, enableTx) {
     digiTxQueued = msg;
     digiTxAttempts = 0;
     digiTxArmed = true;
+    if (step === 0 && digiQsoState === 'IDLE' && getDxCall()) {
+        // Arming the initial call by hand is starting a QSO: enter CALLING so the
+        // auto-sequencer advances on the reply instead of resending the grid (#115).
+        digiQsoPartner = getDxCall(); digiQsoPartnerBusyWith = ''; digiTheirReport = '';
+        digiQsoState = 'CALLING';
+    }
     // All manual sends go out on the operator's chosen TX even/odd parity — one
     // slot per cycle (never -1 / "every slot", which keys both halves).
     digiTxSlotParity = digiCqParity;
@@ -9628,6 +10199,7 @@ function queueDigiCqReply(dxCall, decodedSlotIndex) {
     digiTxAttempts = 0;
     digiQsoState = 'CALLING';
     digiQsoPartner = dxCall.toUpperCase();
+    digiQsoPartnerBusyWith = '';
     // Use the slot index of when the CQ was DECODED (captured before the blocking
     // decode call, before JS thread advanced into the next slot). We TX on the slot
     // OPPOSITE to the CQ sender's slot.
@@ -9666,6 +10238,7 @@ function handleDigiAutoQso(decodes, decodedSlotIndex) {
                 if (cqCall && cqCall !== myCall && userDx && userDx === cqCall) {
                     console.log('[DIGI QSO] IDLE→CALLING: targeted station ' + cqCall + ' sent CQ');
                     digiQsoPartner = cqCall;
+                    digiQsoPartnerBusyWith = '';
                     digiTxAttempts = 0;
                     digiTxQueued = cqCall + ' ' + myCall + ' ' + myGrid;
                     digiTxSlotParity = (dSlot + 1) % 2; // TX on slot OPPOSITE to CQ slot
@@ -9691,8 +10264,11 @@ function handleDigiAutoQso(decodes, decodedSlotIndex) {
                 else { console.log('[DIGI QSO] TX disabled — queued but not armed: ' + digiTxQueued); }
                 digiQsoState = 'EXCHANGE';
                 break;
-            } else if (parts.length >= 2 && parts[1] === digiQsoPartner && parts[0] !== myCall && parts[0] !== 'CQ') {
-                // DX station (parts[1] = FROM) sent to someone who is not us (parts[0] = TO ≠ myCall)
+            } else if (parts.length >= 2 && parts[1] === digiQsoPartner && parts[0] !== myCall && parts[0] !== 'CQ' &&
+                       parts[0] !== digiQsoPartnerBusyWith) {
+                // DX station (parts[1] = FROM) sent to someone who is not us (parts[0] = TO ≠ myCall).
+                // Traffic to the station they were already working when we clicked is not a
+                // new QSO — keep calling until they answer someone else or us.
                 console.log('[DIGI QSO] CALLING→IDLE: ' + digiQsoPartner + ' replied to ' + parts[0] + ', not us — disabling TX');
                 digiReArmPending = false;
                 digiTxArmed = false;
@@ -9859,7 +10435,7 @@ function digiFdRowClick(parts, slotIndex, dxEl) {
         // "CQ [FD] <call> <grid>" → open with our exchange
         var cqCall = parts.length >= 3 ? parts[parts.length - 2] : parts[1];
         if (dxEl) dxEl.value = cqCall;
-        digiQsoPartner = cqCall; digiFdLogged = false; digiTheirReport = '';
+        digiQsoPartner = cqCall; digiQsoPartnerBusyWith = ''; digiFdLogged = false; digiTheirReport = '';
         digiTxQueued = cqCall + ' ' + myCall + ' ' + digiFdExch();
         digiQsoState = 'CALLING';
     } else if (parts.length >= 2) {
@@ -9868,6 +10444,7 @@ function digiFdRowClick(parts, slotIndex, dxEl) {
         digiQsoPartner = dxCall;
         if (dxCall !== prevPartner) digiFdLogged = false;
         var toMe = myCall && parts[0] === myCall;
+        digiQsoPartnerBusyWith = toMe ? '' : parts[0];
         var theirExch = digiFdParseExch(parts.slice(2));
         if (toMe && (parts[2] === 'RR73' || parts[2] === 'RRR' || parts[2] === '73')) {
             digiTheirReport = digiTheirReport || '';
@@ -9915,7 +10492,7 @@ function handleDigiFdAutoQso(decodes, decodedSlotIndex) {
                 var cqCall = parts[parts.length - 2];
                 var userDx = getDxCall();
                 if (cqCall && cqCall !== myCall && userDx && userDx === cqCall) {
-                    digiQsoPartner = cqCall; digiFdLogged = false; digiTheirReport = '';
+                    digiQsoPartner = cqCall; digiQsoPartnerBusyWith = ''; digiFdLogged = false; digiTheirReport = '';
                     digiTxQueued = cqCall + ' ' + myCall + ' ' + myExch;
                     digiTxAttempts = 0; digiTxSlotParity = txParity;
                     if (digiTxEnabled) digiTxArmed = true;
@@ -9936,8 +10513,9 @@ function handleDigiFdAutoQso(decodes, decodedSlotIndex) {
                     digiQsoState = 'EXCHANGE';
                     break;
                 }
-            } else if (parts.length >= 2 && parts[1] === digiQsoPartner && parts[0] !== myCall && parts[0] !== 'CQ') {
-                // partner answered someone else → abort
+            } else if (parts.length >= 2 && parts[1] === digiQsoPartner && parts[0] !== myCall && parts[0] !== 'CQ' &&
+                       parts[0] !== digiQsoPartnerBusyWith) {
+                // partner answered someone else (not the station they were already working) → abort
                 console.log('[DIGI FD] ' + digiQsoPartner + ' replied to ' + parts[0] + ', not us — aborting');
                 digiFdResetToIdle();
                 break;
@@ -10004,6 +10582,11 @@ function initDigiFieldDaySettings() {
         updateDigiMsgRows();
     }
     enCb.addEventListener('change', applyMode);
+    var entCb = document.getElementById('digiEntityCol');
+    var hintCb = document.getElementById('digiWorkedHints');
+    if (entCb) entCb.addEventListener('change', function() { setDigiEntityCol(entCb.checked); });
+    if (hintCb) hintCb.addEventListener('change', function() { setDigiWorkedHints(hintCb.checked); });
+    applyDigiHintPrefs();
     ntxEl.addEventListener('input', syncClass);
     clsEl.addEventListener('change', syncClass);
     secEl.addEventListener('change', function() {
@@ -10071,36 +10654,8 @@ function executeDigiTx(slotPhase) {
         updateDigiStatus('TX', 'tx');
         send({ cmd: 'enableMic', value: true });
 
-        // Local TX monitor: play the generated audio through browser speakers
-        // at reduced volume. The source is tracked on the shared digiMonitorSrc
-        // so external halt paths can still stop it.
-        var monSrc = null;
-        try {
-            if (digiTxCtx && digiTxCtx.state === 'running') {
-                var monBuf = digiTxCtx.createBuffer(1, samples12k.length, 12000);
-                monBuf.copyToChannel(samples12k, 0);
-                monSrc = digiTxCtx.createBufferSource();
-                monSrc.buffer = monBuf;
-                var monGain = digiTxCtx.createGain();
-                monGain.gain.value = 0.025;
-                monSrc.connect(monGain);
-                monGain.connect(digiTxCtx.destination);
-                digiMonitorSrc = monSrc;
-                monSrc.onended = function() {
-                    if (digiMonitorSrc === monSrc) digiMonitorSrc = null;
-                };
-                monSrc.start();
-            }
-        } catch(e) {
-            console.warn('[DIGI TX] local monitor error:', e);
-            monSrc = null;
-        }
-        function stopSidetone() {
-            if (!monSrc) return;
-            try { monSrc.stop(); } catch (e) {}
-            if (digiMonitorSrc === monSrc) digiMonitorSrc = null;
-            monSrc = null;
-        }
+        // Sidetone (local TX monitor) lives inside streamDigiAudio now, so
+        // FT8/FT4 and JS8 share the same playback path. Nothing to do here.
 
         // Capture df/txMsg for the closures below
         var txDf = df;
@@ -10358,6 +10913,39 @@ function streamDigiAudio(samples12k, onDone, onFirstChunk) {
     var actualRate = txCtx.sampleRate;
     console.log('[DIGI stream] AudioContext actualRate=' + actualRate + ' state=' + txCtx.state);
 
+    // Local TX sidetone: play the generated audio through browser speakers
+    // at the same low level the FT8 path used to set up directly. Done here
+    // so every caller — FT8/FT4, JS8, future modes — gets the monitor for
+    // free without remembering to wire it up. The source is tracked on the
+    // shared digiMonitorSrc so external halt paths can still stop it.
+    var monSrc = null;
+    try {
+        if (txCtx.state === 'running') {
+            var monBuf = txCtx.createBuffer(1, samples12k.length, 12000);
+            monBuf.copyToChannel(samples12k, 0);
+            monSrc = txCtx.createBufferSource();
+            monSrc.buffer = monBuf;
+            var monGain = txCtx.createGain();
+            monGain.gain.value = 0.025;
+            monSrc.connect(monGain);
+            monGain.connect(txCtx.destination);
+            digiMonitorSrc = monSrc;
+            monSrc.onended = function () {
+                if (digiMonitorSrc === monSrc) digiMonitorSrc = null;
+            };
+            monSrc.start();
+        }
+    } catch (e) {
+        console.warn('[DIGI stream] sidetone error:', e);
+        monSrc = null;
+    }
+    function stopSidetone() {
+        if (!monSrc) return;
+        try { monSrc.stop(); } catch (e) {}
+        if (digiMonitorSrc === monSrc) digiMonitorSrc = null;
+        monSrc = null;
+    }
+
     // Upsample 12 kHz Float32 → actualRate Float32
     var ratio = actualRate / 12000;
     var outLen = Math.floor(samples12k.length * ratio);
@@ -10557,6 +11145,11 @@ function freqToBand(hz) {
     if (hz >= 24890000 && hz < 24990000) return '12M';
     if (hz >= 28000000 && hz < 29700000) return '10M';
     if (hz >= 50000000 && hz < 54000000) return '6M';
+    if (hz >= 70000000 && hz < 71000000) return '4M';
+    if (hz >= 144000000 && hz < 148000000) return '2M';
+    if (hz >= 222000000 && hz < 225000000) return '1.25M';
+    if (hz >= 420000000 && hz < 450000000) return '70CM';
+    if (hz >= 1240000000 && hz < 1300000000) return '23CM';
     return '';
 }
 
@@ -10999,25 +11592,53 @@ function initDigiHandlers() {
         });
     }
 
-    // Waterfall click/touch → set TX (and RX) freq
+    // Waterfall click/tap → set RX + TX freq (modifiers pick one, see digiApplyClickFreq).
+    // Pointer events cover mouse + touch in one handler; .digi-wf-bar has touch-action:none.
     var wfBar = document.getElementById('digiWfBar');
     if (wfBar) {
-        var handleWfPointer = function(e) {
-            e.preventDefault();
+        // Pointer X → signal BASE frequency (click position = center of the tone span)
+        var wfFreqFromX = function(clientX) {
             var rect = wfBar.getBoundingClientRect();
-            var clientX = e.touches ? e.touches[0].clientX : e.clientX;
-            // Click position = center of signal; subtract offset to get base (tone 0) frequency
             var freq = WF_FREQ_LOW + Math.round(((clientX - rect.left) / rect.width) * (WF_FREQ_HIGH - WF_FREQ_LOW)) - Math.round(digiCenterOffset());
-            freq = Math.max(200, Math.min(2700, freq));
-            if (!digiHoldTxFreq) {
-                digiTxFreq = freq;
-                digiRxFreq = freq;
-                updateDigiTxFreqDisplay();
-                updateDigiRxFreqDisplay();
-            }
+            return Math.max(200, Math.min(2700, freq));
         };
-        wfBar.addEventListener('mousedown', handleWfPointer);
-        wfBar.addEventListener('touchstart', handleWfPointer, { passive: false });
+        wfBar.addEventListener('pointerdown', function(e) {
+            if (e.button !== 0) return;
+            e.preventDefault();
+            digiApplyClickFreq(wfFreqFromX(e.clientX), e);
+        });
+        // The TX / RX tabs are drag handles: dragging one moves only that marker
+        // (touch has no Shift/Ctrl). Dragging TX ignores Hold TX — explicit intent.
+        [['digiWfTxMarker', 'tx'], ['digiWfRxMarker', 'rx']].forEach(function(pair) {
+            var marker = document.getElementById(pair[0]);
+            var tab = marker && marker.querySelector('.digi-wf-label');
+            if (!tab) return;
+            var which = pair[1];
+            var applyDrag = function(e) {
+                var freq = wfFreqFromX(e.clientX);
+                if (which === 'tx') { digiTxFreq = freq; updateDigiTxFreqDisplay(); }
+                else { digiRxFreq = freq; updateDigiRxFreqDisplay(); }
+            };
+            tab.addEventListener('pointerdown', function(e) {
+                if (e.button !== 0) return;
+                e.preventDefault();
+                e.stopPropagation(); // don't let the bar treat this as a click
+                tab.setPointerCapture(e.pointerId);
+                tab.classList.add('dragging');
+            });
+            tab.addEventListener('pointermove', function(e) {
+                if (!tab.hasPointerCapture(e.pointerId)) return;
+                applyDrag(e);
+            });
+            var endDrag = function(e) {
+                if (!tab.hasPointerCapture(e.pointerId)) return;
+                applyDrag(e);
+                tab.releasePointerCapture(e.pointerId);
+                tab.classList.remove('dragging');
+            };
+            tab.addEventListener('pointerup', endDrag);
+            tab.addEventListener('pointercancel', endDrag);
+        });
         drawDigiWaterfall();
     }
 
@@ -11116,10 +11737,19 @@ function initDigiHandlers() {
         });
     }
 
-    // Erase button — clear directed panel
+    // Erase button — clears the Directed panel, or on a phone whichever pane
+    // the tab strip has selected (DECODES clears All Decodes instead).
     var eraseBtn = document.getElementById('digiEraseBtn');
     if (eraseBtn) {
         eraseBtn.addEventListener('click', function() {
+            var area = document.getElementById('digiDecodeArea');
+            var tabs = document.querySelector('.digi-pane-tabs');
+            var phone = tabs && getComputedStyle(tabs).display !== 'none';
+            if (phone && area && area.dataset.pane === 'rx') {
+                digiDecodes = [];
+                renderDigiDecodes();
+                return;
+            }
             digiDirectedDecodes = [];
             var p = document.getElementById('digiDirectedPanel');
             if (p) p.innerHTML = '';
@@ -11158,6 +11788,10 @@ function initDigiHandlers() {
     if (haltBtn) {
         haltBtn.addEventListener('click', function() {
             console.log('[DIGI] Halt TX clicked');
+            // Abort the in-flight audio pacer first (same as the dblclick target
+            // switch) — clearing the flags alone leaves the worklet streaming, so a
+            // TX started before the slot ends would overlap the halted one (#118).
+            haltDigiTx();
             if (digiMonitorSrc) { try { digiMonitorSrc.stop(); } catch(e) {} digiMonitorSrc = null; }
             digiTxArmed = false;
             digiTxActive = false;
@@ -11174,6 +11808,7 @@ function initDigiHandlers() {
             if (etb) etb.classList.remove('active');
             stopDigiTune();
             send({ cmd: 'setPTT', value: false });
+            if (!micEnabled) send({ cmd: 'enableMic', value: false });
             updateDigiStatus('HALT', '');
             updateDigiMsgRows();
             drawDigiWaterfall();
@@ -11482,6 +12117,7 @@ window.dispatchEvent(new Event('ft8tsReady'));
 <script src="cw-decoder-utils.js"></script>
 <script src="cw-decoder.js"></script>
 <script src="ctcss.js"></script>
+<script src="dxcc.js"></script>
 <script src="packet.js"></script>
 </body>
 </html>

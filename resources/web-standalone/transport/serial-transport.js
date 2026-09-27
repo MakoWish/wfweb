@@ -70,14 +70,17 @@
 
     // Icom scope center-span table. Identical across IC-7300 / IC-705 /
     // IC-9700 (the modern HF/VHF rigs).
+    // hz is the half-span the rig takes (0x27 0x15); freq repeats it under the
+    // name the C++ server's rigInfo uses, so the SPA sizes Fixed windows from
+    // either build alike.
     var DEFAULT_SPANS = [
-        { num: 0, name: '±2.5k', hz: 2500   },
-        { num: 1, name: '±5k',   hz: 5000   },
-        { num: 2, name: '±10k',  hz: 10000  },
-        { num: 3, name: '±25k',  hz: 25000  },
-        { num: 4, name: '±50k',  hz: 50000  },
-        { num: 5, name: '±100k', hz: 100000 },
-        { num: 6, name: '±250k', hz: 250000 },
+        { num: 0, name: '±2.5k', hz: 2500,   freq: 2500   },
+        { num: 1, name: '±5k',   hz: 5000,   freq: 5000   },
+        { num: 2, name: '±10k',  hz: 10000,  freq: 10000  },
+        { num: 3, name: '±25k',  hz: 25000,  freq: 25000  },
+        { num: 4, name: '±50k',  hz: 50000,  freq: 50000  },
+        { num: 5, name: '±100k', hz: 100000, freq: 100000 },
+        { num: 6, name: '±250k', hz: 250000, freq: 250000 },
     ];
 
     // 0x15 sub-command -> the SPA status field and the IcomRigCaps meter
@@ -194,7 +197,7 @@
         setToneMode: true, setToneFreq: true, setTsqlFreq: true,
         setDtcsCode: true,
         // Misc
-        setTuner: true, setPower: true, setSpan: true, setScopeRef: true, setScopeSpeed: true,
+        setTuner: true, setPower: true, setSpan: true, setScopeRef: true, setScopeSpeed: true, setScopeMode: true, setScopeEdges: true,
         // CW
         sendCW: true, stopCW: true,
         // Filter width / shape
@@ -221,6 +224,14 @@
     }
     function lsSetInt(key, val) {
         try { localStorage.setItem(key, String(val)); } catch (e) { /* ignore */ }
+    }
+    function lsGetJson(key) {
+        try { var v = localStorage.getItem(key); return v ? JSON.parse(v) : null; }
+        catch (e) { return null; }
+    }
+    function lsSetJson(key, val) {
+        try { localStorage.setItem(key, JSON.stringify(val)); return true; }
+        catch (e) { return false; }
     }
 
     // Decode a BCD-encoded byte (0x12 -> 12) — used for scope sequence numbers.
@@ -300,8 +311,11 @@
             };
 
             // Dual-VFO read mode, derived from rig caps in _finalizeDetection.
-            // 'cmd29'              — IC-7610 / IC-785x / IC-7760: read both
-            //                        receivers via 0x29 0x00 0x03 / 0x29 0x01 0x03
+            // 'cmd29'              — IC-7610 / IC-785x / IC-7760 / IC-7600:
+            //                        Main/Sub rigs, read both bands via
+            //                        0x25 0x00 / 0x25 0x01 (fixed Main/Sub,
+            //                        not selected/unselected), select them
+            //                        with 07 D0 / 07 D1
             // 'selectedUnselected' — IC-7300 / IC-705 / IC-7100 / IC-905 /
             //                        IC-9700 / IC-7300MK2: read both VFOs via
             //                        0x25 0x00 / 0x25 0x01
@@ -632,10 +646,10 @@
                     }
                     var wasMem = this.state.selectedVfo === 'MEM';
                     this._setSelectedVfo(vfo);
-                    this._enqueue('selectVFO', civ.cmdSelectVFO(vfo));
+                    this._enqueue('selectVFO', civ.cmdSelectVFO(vfo, this._dualVfoMode === 'cmd29'));
                     // Re-pull both VFOs so the side display flips to the new
                     // "other" VFO and the main display ends up matching the
-                    // rig. The 0x25 / 0x29 replies will land in
+                    // rig. The 0x25 replies will land in
                     // _applyVfoFreq and update the SPA.
                     this._enqueueDualVfoReads();
                     // Back from a memory channel the VFO's own mode / tone /
@@ -651,7 +665,7 @@
                     this._enqueueDualVfoReads();
                     return;
                 case 'equalizeVFO':
-                    this._enqueue('equalizeVFO', civ.cmdEqualizeVFO());
+                    this._enqueue('equalizeVFO', civ.cmdEqualizeVFO(this._dualVfoMode === 'cmd29'));
                     this._enqueueDualVfoReads();
                     return;
                 case 'setTxMeter':
@@ -748,6 +762,28 @@
                     if (typeof obj.value === 'number' && this._hasSpectrum)
                         this._enqueue('setScopeSpeed', civ.cmdSetScopeSpeed(obj.value));
                     return;
+                case 'setScopeMode':
+                    // Center / Fixed / Scroll (issue #113). Same queue key as
+                    // the connect-time setup so a tap replaces a pending frame.
+                    if (typeof obj.value === 'number' && this._hasSpectrum)
+                        this._enqueue('scopeMode', civ.cmdSetScopeMode(obj.value));
+                    return;
+                case 'setScopeEdges': {
+                    // Fixed-mode window in Hz (issue #113): written into edge
+                    // set 3 of the frequency range that holds it, then that
+                    // set is selected. Same policy as the C++ server.
+                    var lo = obj.lower, hi = obj.upper;
+                    if (!this._hasSpectrum || typeof lo !== 'number' || typeof hi !== 'number' || !(hi > lo)) return;
+                    var ranges = (RIG_CAPS[this.civAddr] && RIG_CAPS[this.civAddr].scopeEdgeRanges) || [];
+                    for (var ri = 0; ri < ranges.length; ri++) {
+                        if (lo >= ranges[ri].minFreq && hi <= ranges[ri].maxFreq) {
+                            this._enqueue('scopeEdges', civ.cmdSetScopeFixedEdges(ranges[ri].num, 3, lo, hi));
+                            this._enqueue('scopeEdge', civ.cmdSetScopeEdge(3));
+                            return;
+                        }
+                    }
+                    return;
+                }
                 case 'sendCW':
                     if (!this._rigCanTransmit()) return;
                     if (typeof obj.text !== 'string' || !obj.text.length) return;
@@ -1543,6 +1579,20 @@
             var su = civ.parseSelectedUnselectedFreqReply(payload);
             if (su !== null && su.hz > 0) {
                 this._lastFreqStamp = Date.now();
+                if (this._dualVfoMode === 'cmd29') {
+                    // Main/Sub rigs: the byte is the band, not "selected".
+                    // 0x00 is always Main ('A'), 0x01 always Sub ('B'). In
+                    // memory mode the operating band shows the recalled
+                    // channel and belongs to neither VFO slot.
+                    var band = su.selected ? 'A' : 'B';
+                    var operating = inMem ? this._lastRealVfo : (this.state.selectedVfo || 'A');
+                    if (inMem) {
+                        if (band === operating) this._applyMemFreq(su.hz);
+                        return;
+                    }
+                    this._applyVfoFreq(band, su.hz, band === operating);
+                    return;
+                }
                 if (inMem) {
                     if (su.selected) this._applyMemFreq(su.hz);
                     return;
@@ -1881,13 +1931,109 @@
             return civ.getRigMemFormat(this.civAddr);
         }
 
-        _memScanStart(obj) {
-            var fmt = this._memFormat();
-            if (!fmt) {
-                this._emit('memoryScanComplete',
-                    { count: 0, error: 'Memories not supported by this radio' });
+        // ---------- wfweb's own memory channels (issue #114) --------------
+        //
+        // A rig with no MemFormat can't be asked what is in a channel, so
+        // there is nothing to list. Instead of refusing, the browser keeps its
+        // own channels in localStorage and serves the same five commands from
+        // there — the panel can't tell the difference. The server does exactly
+        // this in MemoryStore; here the "file" is per-origin browser storage,
+        // keyed by CI-V address so two radios don't share one list.
+        _memIsLocal() {
+            return !this._memFormat();
+        }
+
+        _memLocalKey() {
+            // Hex, so the key reads like the CI-V address everywhere else
+            // does ("...5e" for an IC-718, not its decimal 94).
+            return 'wfweb.memories.' + Number(this.civAddr).toString(16);
+        }
+
+        _memLocalAll() {
+            var o = lsGetJson(this._memLocalKey());
+            return (o && typeof o === 'object') ? o : {};
+        }
+
+        // Same record shape the rig path emits, so the SPA renders either.
+        _memLocalToJson(ch, e) {
+            return {
+                group: 0, channel: ch | 0,
+                frequency: e.freq | 0,
+                mode: civ.codeToMode[e.mode] || ('?' + e.mode),
+                modeReg: e.mode | 0,
+                filter: e.filter | 0 || 1,
+                name: e.name || '',
+                local: true, del: false,
+            };
+        }
+
+        _memLocalScan() {
+            var all = this._memLocalAll();
+            var chans = Object.keys(all).map(Number).sort(function (a, b) { return a - b; });
+            for (var i = 0; i < chans.length; i++) {
+                this._emit('memoryChannel',
+                    { memory: this._memLocalToJson(chans[i], all[chans[i]]) });
+            }
+            this._emit('memoryScanComplete', { count: chans.length, local: true });
+        }
+
+        _memLocalWrite(ch, name) {
+            var freq = this.state.frequency || this.state.vfoAFrequency || 0;
+            if (!(freq > 0)) {
+                this._emit('memoryError', { error: 'No frequency to store yet' });
                 return;
             }
+            var modeCode = civ.modeToCode[this.state.mode || 'USB'];
+            if (typeof modeCode !== 'number') modeCode = 0x01; // USB
+            var all = this._memLocalAll();
+            all[ch] = {
+                freq: freq, mode: modeCode,
+                filter: (this.state.filter | 0) > 0 ? (this.state.filter | 0) : 1,
+                name: String(name || '').trim().slice(0, 32),
+            };
+            if (!lsSetJson(this._memLocalKey(), all)) {
+                this._emit('memoryError', { error: 'Browser storage is full or blocked' });
+                return;
+            }
+            this._emit('memoryChannel', { memory: this._memLocalToJson(ch, all[ch]) });
+        }
+
+        _memLocalRename(ch, name) {
+            var all = this._memLocalAll();
+            if (!all[ch]) {
+                this._emit('memoryError', { error: 'No such memory channel' });
+                return;
+            }
+            all[ch].name = String(name || '').trim().slice(0, 32);
+            lsSetJson(this._memLocalKey(), all);
+            this._emit('memoryChannel', { memory: this._memLocalToJson(ch, all[ch]) });
+        }
+
+        _memLocalClear(ch) {
+            var all = this._memLocalAll();
+            delete all[ch];
+            lsSetJson(this._memLocalKey(), all);
+            this._emit('memoryChannel', { memory: { channel: ch, group: 0, del: true, local: true } });
+        }
+
+        // Tune the VFO, and nothing else. Deliberately no 0x08: on a rig like
+        // the IC-718 that would select the *radio's* channel N, which has
+        // nothing to do with the entry stored here under that number.
+        _memLocalRecall(ch) {
+            var e = this._memLocalAll()[ch];
+            if (!e) {
+                this._emit('memoryError', { error: 'No such memory channel' });
+                return;
+            }
+            if (e.freq > 0) this._enqueue('setFreq', civ.cmdSetFrequency(e.freq));
+            var name = civ.codeToMode[e.mode];
+            if (name) this._enqueue('setMode', civ.cmdSetMode(name, e.filter || 1));
+        }
+
+        _memScanStart(obj) {
+            var fmt = this._memFormat();
+            // No MemFormat: serve wfweb's own channels instead (issue #114).
+            if (!fmt) { this._memLocalScan(); return; }
             // Cancel any previous scan that's still in flight.
             this._memScanCancel();
             var mc = this._memCaps || { memStart: 1, memMax: 0 };
@@ -1950,10 +2096,10 @@
 
         _memWrite(obj) {
             var fmt = this._memFormat();
-            if (!fmt) return;
             if (!obj || obj.channel === undefined) return;
             var ch = obj.channel | 0;
             if (!this._memChannelOk(ch)) return;
+            if (!fmt) { this._memLocalWrite(ch, obj.name); return; }
             var group = (obj.group | 0) || 0;
             // Snapshot current VFO A — the SPA's MEM-write button stores
             // whatever is on VFO A right now. Mirrors webserver.cpp:
@@ -2003,10 +2149,10 @@
 
         _memClear(obj) {
             var fmt = this._memFormat();
-            if (!fmt) return;
             if (!obj || obj.channel === undefined) return;
             var ch = obj.channel | 0;
             if (!this._memChannelOk(ch)) return;
+            if (!fmt) { this._memLocalClear(ch); return; }
             var group = (obj.group | 0) || 0;
             delete this._memCache[group * 65536 + ch];
             this._enqueue('clearMemory:' + ch,
@@ -2026,7 +2172,9 @@
         _memRecall(obj) {
             var mc = this._memCaps;
             var fmt = this._memFormat();
-            if (!mc || !fmt || !obj || obj.channel === undefined) return;
+            if (!obj || obj.channel === undefined) return;
+            if (!fmt) { this._memLocalRecall(obj.channel | 0); return; }
+            if (!mc) return;
             var ch = obj.channel | 0;
             var group = (obj.group | 0) || 0;
             if (!this._memChannelOk(ch) || group < 0) return;
@@ -2108,9 +2256,10 @@
         // does the same from its memoryType cache).
         _memRename(obj) {
             var fmt = this._memFormat();
-            if (!fmt || !obj || obj.channel === undefined) return;
+            if (!obj || obj.channel === undefined) return;
             var ch = obj.channel | 0;
             var group = (obj.group | 0) || 0;
+            if (!fmt) { this._memLocalRename(ch, obj.name); return; }
             var mem = this._memCache[group * 65536 + ch];
             if (!mem || mem.del || mem.empty) {
                 console.warn('[CIV] renameMemory: channel ' + ch + ' group ' + group + ' not cached');
@@ -2278,18 +2427,27 @@
             }
         }
 
+        // Same header the C++ server builds (webserver.cpp, funcScopeWaveData):
+        //   [0x01][scopeMode][outOfRange][pad][startMHz f32][endMHz f32][pixels]
+        // scopeMode: 0 Center, 1 Fixed, 2 Scroll-C, 3 Scroll-F (rig 0x27 0x14).
+        // Out of range (Fixed mode, VFO outside the window) carries no pixels
+        // from the rig; emit a zero-filled sweep of the usual length so the
+        // SPA paints blank rows instead of freezing on the last sweep.
         _emitSpectrum(empty) {
             var pixels = empty ? [] : this._scope.pixels;
+            var n = empty ? (this._lastPixelCount || 475) : pixels.length;
+            if (!empty) this._lastPixelCount = n;
             var startMhz = this._scope.startFreq / 1e6;
             var endMhz   = this._scope.endFreq / 1e6;
-            var buf = new ArrayBuffer(12 + pixels.length);
+            var buf = new ArrayBuffer(12 + n);
             var view = new DataView(buf);
             view.setUint8(0, 0x01);
-            view.setUint8(1, 0x00);
-            view.setUint16(2, 0, true);
+            view.setUint8(1, this._scope.mode & 0xFF);
+            view.setUint8(2, empty ? 1 : 0);
+            view.setUint8(3, 0);
             view.setFloat32(4, startMhz, true);
             view.setFloat32(8, endMhz,   true);
-            if (pixels.length) {
+            if (!empty) {
                 var bytes = new Uint8Array(buf, 12);
                 for (var i = 0; i < pixels.length; i++) bytes[i] = pixels[i];
             }
@@ -2313,12 +2471,10 @@
             this._enqueue('scopeOn',   new Uint8Array([0x27, 0x10, 0x01]));
             this._enqueue('scopeData', new Uint8Array([0x27, 0x11, 0x01]));
             if (!this._hasSpectrum) return;
-            // Force Center scope mode: the SPA keeps the RX indicator fixed
-            // mid-screen and scrolls the waterfall under it, which only
-            // renders correctly when the rig reports center-mode spectrum.
-            // A rig left in Fixed mode sends static band edges, so the
-            // marker/passband/span all appear frozen (issue #75). 0 = Center.
-            this._enqueue('scopeMode',   new Uint8Array([0x27, 0x14, 0x00, 0x00]));
+            // The scope mode (Center / Fixed / Scroll) is the SPA's to set: it
+            // draws whichever the rig reports (the mode rides in every sweep)
+            // and re-commands its last pick on connect via setScopeMode
+            // (issue #113). Forcing Center here used to be the fix for #75.
             // Force Carrier Point Center: with Filter Center (0) the spectrum
             // centres on the passband instead of the VFO, so a signal aligned
             // to the visual passband is mistuned in RX audio (issue #75).
@@ -2355,6 +2511,8 @@
                 modes: DEFAULT_MODES,
                 filters: DEFAULT_FILTERS,
                 spans: DEFAULT_SPANS,
+                scopeModes: (entry && entry.scopeModes) || [],
+                scopeFixedEdges: !!(entry && entry.scopeEdgeRanges && entry.scopeEdgeRanges.length),
                 preamps: preamps,
                 attenuators: attenuators,
                 // Band table for the BAND picker — an unknown rig gets none
@@ -2383,7 +2541,11 @@
                 dtcsCodes: caps.hasDTCS ? DTCS_CODES : [],
                 hasSpectrum: caps.hasSpectrum,
                 // Memory channels (#92) — same three fields the server's caps carry.
-                hasMemoryMode: !!(this._memCaps && this._memCaps.hasMemoryMode),
+                // MEM is a rig concept: hidden when the channels are wfweb's,
+                // where a 0x08 select would jump to an unrelated rig channel.
+                hasMemoryMode: !!(this._memCaps && this._memCaps.hasMemoryMode)
+                               && !this._memIsLocal(),
+                memoriesLocal: this._memIsLocal(),
                 memGroups: this._memCaps ? this._memCaps.memGroups : 0,
                 memStart:  this._memCaps ? this._memCaps.memStart : 1,
                 spectAmpMax: 160,     // Icom amplitude scale (matches C++ wfweb)
@@ -2493,7 +2655,7 @@
             }, 1000);
             // Slow refresh of the unselected/Sub VFO so dial motion on the
             // *other* VFO eventually shows up in the side display. The rig
-            // doesn't push unsolicited 0x25 0x01 / 0x29 0x01 frames on its
+            // doesn't push unsolicited 0x25 0x01 frames on its
             // own — without this, the side stays stale forever.
             if (this._dualVfoMode !== 'single') {
                 this._otherVfoPollTimer = setInterval(() => {

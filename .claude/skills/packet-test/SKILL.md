@@ -49,7 +49,7 @@ When refs go stale across snapshots, drive directly via `browser_evaluate` with 
 3. **B → "How are you"**: same pattern. Wait on A for the text.
 4. **Screenshot both** with `browser_take_screenshot`, `fullPage: true`. Pass the full path as `filename`: `.playwright-mcp/wfweb-packet-<baud>-A.png` and `...-B.png`. The MCP does NOT auto-target `.playwright-mcp/` — bare filenames land in the project root (the MCP's CWD). **Do not use `/tmp`** — it's outside the MCP's allowed roots and will fail.
 5. **B → Disconnect**: click `#termDisconnectBtn`. Both chips go to `DISCONNECTED`.
-6. Before 1200 bd: click `#packetMode1200` on both tabs, re-set `#termPeerCall` on A (it may revert to placeholder), and optionally wipe `window.Packet.state.terminal.sessions.t1.scrollback = []` then call `window.Packet.renderTerm()` for a clean screenshot.
+6. Before 1200 bd: click `#packetMode1200` on both tabs, re-set `#termPeerCall` on A (it may revert to placeholder), and optionally wipe `window.Packet.state.terminal.sessions.t1.scrollback = []` then click `#packetTabTerm` to re-render for a clean screenshot (`renderTerm` is not exported on `window.Packet`).
 
 ## Teardown and report
 
