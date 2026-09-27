@@ -3147,9 +3147,13 @@ void webServer::handleCommand(QWebSocket *client, const QJsonObject &cmd)
             s->lastActivityMs = QDateTime::currentMSecsSinceEpoch();
             // Make sure we'll accept inbound to this own_call too.
             termEnsureRegistered(chan, own);
-            termAppendScrollback(s, termScrollbackEntry(QStringLiteral("info"),
-                QString("Connecting to %1...").arg(peer).toUtf8()));
-            termBroadcastSession(s);
+            {
+                QJsonObject e = termScrollbackEntry(QStringLiteral("info"),
+                    QString("Connecting to %1...").arg(peer).toUtf8());
+                termAppendScrollback(s, e);
+                termBroadcastSession(s);
+                termBroadcastData(s->sid, e);
+            }
             QMetaObject::invokeMethod(axProc, "connectRequest", Qt::QueuedConnection,
                                       Q_ARG(int, TERM_FIXED_CLIENT),
                                       Q_ARG(int, chan),
@@ -3171,10 +3175,14 @@ void webServer::handleCommand(QWebSocket *client, const QJsonObject &cmd)
             // fire server_link_terminated.  So re-issuing the same dlq event
             // here gets us instant tear-down for free.
             s->state = TerminalSession::Disconnecting;
-            termAppendScrollback(s, termScrollbackEntry(QStringLiteral("info"),
-                force ? QStringLiteral("Forcing disconnect...").toUtf8()
-                      : QStringLiteral("Disconnecting...").toUtf8()));
-            termBroadcastSession(s);
+            {
+                QJsonObject e = termScrollbackEntry(QStringLiteral("info"),
+                    force ? QStringLiteral("Forcing disconnect...").toUtf8()
+                          : QStringLiteral("Disconnecting...").toUtf8());
+                termAppendScrollback(s, e);
+                termBroadcastSession(s);
+                termBroadcastData(s->sid, e);
+            }
             QMetaObject::invokeMethod(axProc, "disconnectRequest", Qt::QueuedConnection,
                                       Q_ARG(int, TERM_FIXED_CLIENT),
                                       Q_ARG(int, s->chan),
@@ -6601,9 +6609,16 @@ void webServer::onAxLinkEstablished(int client, int chan,
         termSessions.insert(s->sid, s);
     }
     s->state = TerminalSession::Connected;
-    termAppendScrollback(s, termScrollbackEntry(QStringLiteral("info"),
-        QString("*** CONNECTED to %1").arg(peerCall).toUtf8()));
+    // Session first, data second: a brand-new (inbound) sid must reach the
+    // browser as a termSession so the tab is created and promoted; the
+    // termData then lands in that tab.  The browser only pulls termHistory
+    // when the active tab changes, so without the termData broadcast these
+    // info lines were invisible until a reload.
+    QJsonObject e = termScrollbackEntry(QStringLiteral("info"),
+        QString("*** CONNECTED to %1").arg(peerCall).toUtf8());
+    termAppendScrollback(s, e);
     termBroadcastSession(s);
+    termBroadcastData(s->sid, e);
     qInfo().noquote() << "Web: AX.25 link up" << s->sid
                       << ownCall << "<->" << peerCall
                       << (incoming ? "(inbound)" : "(outbound)");
@@ -6619,8 +6634,10 @@ void webServer::onAxLinkTerminated(int client, int chan,
     s->state = TerminalSession::Disconnected;
     QString reason = timeout ? QStringLiteral("*** DISCONNECTED (link timeout)")
                              : QStringLiteral("*** DISCONNECTED");
-    termAppendScrollback(s, termScrollbackEntry(QStringLiteral("info"), reason.toUtf8()));
+    QJsonObject e = termScrollbackEntry(QStringLiteral("info"), reason.toUtf8());
+    termAppendScrollback(s, e);
     termBroadcastSession(s);
+    termBroadcastData(s->sid, e);
     qInfo().noquote() << "Web: AX.25 link down" << s->sid
                       << "timeout=" << timeout;
 }
