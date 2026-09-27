@@ -1131,8 +1131,8 @@ body.digi-open #bottomBar { grid-row: 5; }
 .digi-decode-row.digi-tx-pending .digi-decode-msg { color: #88a; font-style: italic; }
 .digi-logged-row { background: #001800; border-left: 3px solid #0c0; color: #0d0; padding: 2px 6px; font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.5px; }
 .digi-decode-row.digi-tx-pending .digi-decode-snr { color: #666; }
-/* DXCC entity column + worked-before hints (dxcc.js + the logbook).  The
-   entity column is desktop-only (hidden with .digi-decode-freq on phones). */
+/* DXCC entity column + worked-before hints (dxcc.js + the logbook).  Shown
+   on phones too (#122), narrower; only the hover "ENTITY x" is desktop-only. */
 .digi-decode-star { flex: 0 0 auto; font-size: 11px; line-height: 1; cursor: help; }
 .digi-decode-star.new-one  { color: #ffc83d; text-shadow: 0 0 3px rgba(255, 200, 60, .55); }
 .digi-decode-star.new-band { color: #b8c2cf; }
@@ -2054,7 +2054,8 @@ body.digi-open #bottomBar { grid-row: 5; }
     /* All Decodes panel: keep SNR, hide dt and Hz */
     #digiRxPanel .digi-decode-dt,
     #digiRxPanel .digi-decode-freq { display: none; }
-    .digi-decode-ent, .digi-ent-hide { display: none; }
+    .digi-ent-hide { display: none; }
+    .digi-decode-ent { max-width: 84px; }
     /* Phone: two columns don't fit — the Directed pane collapsed to one
        clipped line under the QSO message rows, and decodes squeezed into
        half the width. Show one pane at a time, full width, picked by the
@@ -2462,11 +2463,9 @@ body.digi-open #bottomBar { grid-row: 5; }
                 <button id="digiHoldTxBtn" class="digi-action-btn wf-btn" title="Clicks move RX only; Shift+click or dragging the TX tab still moves TX">Hold TX</button>
                 <div class="digi-freq-group">
                     <span class="digi-field-label">TX:</span>
-                    <input type="number" id="digiTxFreqDisplay" class="digi-tx-freq-display" min="300" max="2800" step="1" value="1000">
-                    <span class="digi-field-label">Hz</span>
+                    <input type="number" id="digiTxFreqDisplay" class="digi-tx-freq-display" min="300" max="2800" step="1" value="1000" title="TX audio offset (Hz)">
                     <span class="digi-field-label">RX:</span>
-                    <input type="number" id="digiRxFreqDisplay" class="digi-rx-freq-display" min="300" max="2800" step="1" value="1000">
-                    <span class="digi-field-label">Hz</span>
+                    <input type="number" id="digiRxFreqDisplay" class="digi-rx-freq-display" min="300" max="2800" step="1" value="1000" title="RX audio offset (Hz)">
                 </div>
             </div>
 
@@ -8757,6 +8756,10 @@ function digiSetPane(pane) {
         var u = document.getElementById('digiDirectedUnread');
         if (u) u.textContent = '';
     }
+    // Rows appended while a pane was hidden couldn't scroll it (display:none
+    // has no scrollHeight), so jump to the newest row now that it's visible.
+    var p = document.getElementById(pane === 'rx' ? 'digiRxPanel' : 'digiDirectedPanel');
+    if (p) p.scrollTop = p.scrollHeight;
 }
 // Badge the DIRECTED tab when a row lands there while another pane is up.
 (function () {
@@ -11688,10 +11691,19 @@ function initDigiHandlers() {
         });
     }
 
-    // Erase button — clear directed panel
+    // Erase button — clears the Directed panel, or on a phone whichever pane
+    // the tab strip has selected (DECODES clears All Decodes instead).
     var eraseBtn = document.getElementById('digiEraseBtn');
     if (eraseBtn) {
         eraseBtn.addEventListener('click', function() {
+            var area = document.getElementById('digiDecodeArea');
+            var tabs = document.querySelector('.digi-pane-tabs');
+            var phone = tabs && getComputedStyle(tabs).display !== 'none';
+            if (phone && area && area.dataset.pane === 'rx') {
+                digiDecodes = [];
+                renderDigiDecodes();
+                return;
+            }
             digiDirectedDecodes = [];
             var p = document.getElementById('digiDirectedPanel');
             if (p) p.innerHTML = '';
