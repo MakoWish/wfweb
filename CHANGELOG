@@ -6,6 +6,127 @@ a built-in web interface. See https://gitlab.com/eliggett/wfview for the
 upstream wfview history.
 
 
+v0.9.1 (2026-09-27)
+--------------------
+
+Upgrade notes (Docker):
+- The QSO log now lives on the server (see Logbook below), and the image
+  keeps its settings and log under /data. Mount a volume at /data, or
+  the log lasts only as long as the container. Settings that used to sit
+  at /root/.config/wfweb/wfweb.conf move to /data/wfweb/wfweb.conf. The
+  image no longer declares VOLUME ["/data"], because a hidden anonymous
+  volume would be lost on `docker run --rm`. wfweb warns at startup and
+  in the log panel when the log is on storage that won't survive the
+  container. DOCKER.md now shows the mount paths wfweb actually uses;
+  the documented volume used to persist nothing.
+
+AppImage:
+- New .AppImage downloads for Linux x86_64 and ARM64 (Raspberry Pi):
+  one file that runs on any distro with glibc 2.36 or newer (Debian 12+,
+  Ubuntu 24.04+, Fedora 37+, Arch, openSUSE…), not only the Debian and
+  Ubuntu releases the .debs target. `chmod +x` it and run it. It bundles
+  Qt, RADE, codec2 and the rest; the host needs only the ALSA library
+  and OpenSSL 3. Each build is boot-tested headless in CI before it
+  ships.
+
+Logbook (server build):
+- The QSO log is a server-side ADIF file shared by every browser, and
+  it's built for lifetime logs: 100k QSOs is a normal case. The panel
+  loads 100 rows at a time ("Load older" pages further back) and each
+  browser receives only the changes. On first connect a browser hands
+  its old local log to the server; the local copy is removed only once
+  the server confirms the log is on durable storage. (#109, thanks
+  MakoWish)
+- The log panel gets a Log management menu. "Download new QSOs (n)"
+  gives plain ADIF with only the QSOs not yet exported, ready for
+  another logging service. "Download the full logbook" keeps every
+  field, so it restores faithfully. "Import an ADIF file…" merges a file
+  and skips duplicates. Clear Log is gone from the UI. A REST DELETE
+  still clears the log, and the previous file is always kept as a
+  timestamped .bak.
+- Remote logging: --remote-log <host[:port]> sends every logged QSO to
+  an external logging program (GridTracker, JTAlert, Log4OM… over the
+  WSJT-X UDP protocol). --remote-log-decodes also forwards FT8/FT4
+  decodes. It's set on the server only, in the settings file ([RemoteLog])
+  or on the command line; the log panel shows the current state.
+- REST: paged GET /api/v1/logbook (limit, before, call), ADIF import
+  and export, and GET/PUT /api/v1/station. See REST_API.md.
+
+Station:
+- The station callsign and grid are kept on the server and applied to
+  every browser. Before, each browser pushed its own copy on connect and
+  the last one to connect won, so a stale tab could quietly bring back an
+  old callsign; QRZ then rejected QSOs. Every QSO is stamped with ADIF
+  STATION_CALLSIGN. (#109)
+
+FT8 / FT4:
+- Each decode row shows the sender's DXCC entity (from AD1C's cty.dat).
+  A gold star marks an entity never worked, a silver star one not yet
+  worked on this band, and stations already worked on this band are
+  dimmed. Both hints can be turned off in Station Settings.
+- The RX and TX markers move independently, as in WSJT-X. A click moves
+  both (TX stays put with Hold TX on), Shift+click moves TX only, and
+  Ctrl/Cmd+click moves RX only. On a touchscreen, drag the RX or TX tab
+  on the waterfall. (#117)
+- Phones: the entity column is shown, the TX/RX offsets fit on one line,
+  switching between DECODES and DIRECTED scrolls to the newest row, and
+  Erase clears whichever pane is showing. (#122)
+- Clicking a station that is still working someone else, or one that
+  just sent 73, now starts a real QSO: the sequence moves on when they
+  answer, instead of resending the grid forever. (#115)
+- Halt TX stops the transmission immediately. It used to let the halted
+  frame keep playing, and a second transmission could start on top of
+  it. (#118)
+- The QSO Messages block no longer cuts off its sixth row.
+
+Scope / waterfall:
+- The scope follows the rig's own CENTER / FIXED / SCROLL modes. In FIXED
+  and SCROLL the band edges stay put and the marker moves. On rigs whose
+  fixed edges can be written from CI-V (IC-7300, IC-7300MK2, IC-7610,
+  IC-705, IC-9700), the SPAN row picks the FIXED window: BAND covers the
+  ham band you're on, and a span key sets that width around the VFO. In
+  SCROLL, dragging to the edge of the scope moves the window by one page,
+  which makes SCROLL usable on a phone. The old FIXED / TRACK toggle for
+  waterfall history is now HOLD / PAN, used in CENTER. Connecting no
+  longer forces the rig into Center mode. (#113)
+- The spectrum trace is drawn at full device resolution as a continuous
+  outline. It is no longer a blocky staircase on HiDPI screens.
+
+Memories:
+- The IC-7600 is set up as the MAIN/SUB radio it is: the VFO tile
+  switches bands, each band shows its own frequency, and memories
+  read, write and name correctly. Firmware 2.00 is required. (#108)
+- A memory saved while SUB is selected stores SUB's frequency and mode
+  (IC-7600 and IC-7610). (#108)
+- The memory list stays on screen during a rescan, and a second save can
+  no longer overwrite a channel the scan hasn't read yet. Leaving memory
+  mode no longer shows the channel's frequency as VFO A. (#108)
+- Memory writes on Icoms connected over LAN stopped failing after the
+  first reconnect: the frame grew on every reconnect until the rig
+  refused it. IC-7300MK2 memory names are 16 characters. (#111)
+- The IC-718 and the IC-706 family can't read a memory channel back
+  over CI-V. They now get wfweb's own memory channels, stored on the
+  server (or in the browser, standalone) and marked as local. Rigs that
+  can't store channels at all report an error instead of silently doing
+  nothing. (#114)
+- POST /api/v1/radio/memories/{ch}/recall recalled channel 0 whatever
+  channel was asked for. Fixed.
+
+Web UI:
+- Shift+Up/Down or Ctrl+Up/Down tunes in 10 kHz steps. (#120)
+
+Packet:
+- The terminal shows CONNECTED, DISCONNECTED and the connecting and
+  disconnecting lines as they happen. Before, they only appeared after a
+  reload.
+
+Packaging:
+- The server looks for rig files next to its binary first, so relocated
+  installs such as the AppImage find them.
+- Removed desktop-GUI leftovers (Qt translations, the macOS plist) that a
+  headless app doesn't use.
+
+
 v0.9.0 (2026-09-13)
 --------------------
 

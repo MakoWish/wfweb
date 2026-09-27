@@ -10,7 +10,7 @@ wfweb turns your transceiver into a web-accessible station. Waterfall, SSB, CW d
 
 ![FT8 digital mode panel](ft8.png)
 
-**FT8 / FT4** — decode, call and log without leaving the page; every decode is marked on the waterfall.
+**FT8 / FT4** — decode, call and log without leaving the page; every decode is marked on the waterfall and tagged with its DXCC entity, with stars for new ones.
 
 ![JS8 messenger panel](js8.png)
 
@@ -34,11 +34,11 @@ wfweb turns your transceiver into a web-accessible station. Waterfall, SSB, CW d
 
 wfweb is a fork of [wfview](https://gitlab.com/eliggett/wfview), the outstanding open-source front-end for Icom, Kenwood, and Yaesu transceivers by Elliott H. Liggett W6EL, Phil E. Taylor M0VSE, and contributors.
 
-Everything wfview does, wfweb does too — plus a built-in web interface:
+wfweb keeps wfview's radio engine and replaces the desktop GUI with a built-in web interface:
 
 | Feature | wfview | wfweb |
 |---|:---:|:---:|
-| Desktop GUI (Qt) | ✓ | ✓ |
+| Desktop GUI (Qt) | ✓ | — |
 | Full radio control (CI-V, LAN) | ✓ | ✓ |
 | Waterfall display | ✓ | ✓ |
 | Audio over LAN | ✓ | ✓ |
@@ -52,6 +52,7 @@ Everything wfview does, wfweb does too — plus a built-in web interface:
 | RADE (Radio Autoencoder) | — | ✓ |
 | FreeDV digital voice (700D/700E/1600) | — | ✓ |
 | AX.25 packet — 300/1200/9600, APRS, terminal, YAPP | — | ✓ |
+| Server-side ADIF logbook, remote logging (GridTracker, JTAlert, Log4OM…) | — | ✓ |
 | Mobile-responsive UI | — | ✓ |
 | Headless / no-display operation | — | ✓ |
 
@@ -86,10 +87,17 @@ In every case, once wfweb is running you open `https://<host>:8080` in your brow
 
 ### 1. Native build — USB radio
 
-Download a pre-built binary from [GitHub Releases](../../releases) for your platform, plug in your radio, and run:
+Download a pre-built binary from [GitHub Releases](../../releases) for your platform (see [Downloads](#downloads) — on Linux, a `.deb` for Debian/Ubuntu or an `.AppImage` for any other distro), plug in your radio, and run:
 
 ```bash
 ./wfweb
+```
+
+With the AppImage, make it executable first and run the file itself:
+
+```bash
+chmod +x wfweb_*.AppImage
+./wfweb_*.AppImage
 ```
 
 That's it — any supported Icom (IC-7300, IC-7300 Mk2, IC-7610, IC-705, IC-9700, IC-7100, IC-7410) is auto-detected over USB at its default CI-V address.
@@ -114,10 +122,13 @@ Replace the IP and credentials with your radio's settings. If your radio uses a 
 
 No build, no dependencies. The image `k1fm/wfweb` is multi-arch (`linux/amd64` and `linux/arm64`) — it runs on x86 servers, Raspberry Pi, and everything in between.
 
+Always mount a volume at `/data`: it holds your settings, the TLS certificate and the QSO logbook. Without one, all of that disappears with the container (wfweb warns about it in its log and in the web UI's log panel).
+
 **LAN radio (e.g. IC-7300 Mk2 via Ethernet):**
 
 ```bash
 docker run --rm -it \
+  -v wfweb-data:/data \
   -p 8080:8080 -p 8081:8081 \
   k1fm/wfweb --lan 192.168.1.100 --lan-user admin --lan-pass secret
 ```
@@ -131,11 +142,14 @@ connect on demand with the web UI's **Reconnect** button.
 
 ```bash
 docker run --rm -it \
+  -v wfweb-data:/data \
   --device /dev/ttyUSB0 \
   --device /dev/snd --group-add audio \
   -p 8080:8080 -p 8081:8081 \
   k1fm/wfweb
 ```
+
+> **Upgrading from v0.9.0 or earlier?** Settings used to live at `/root/.config/wfweb/wfweb.conf`. If you mounted a volume there, copy the file to `/data/wfweb/wfweb.conf` in the new volume (or re-enter your settings in the web UI once). See [DOCKER.md](DOCKER.md) for details.
 
 See [Docker details](#docker-details) below for USB audio, custom serial ports, and building the image locally.
 
@@ -230,7 +244,7 @@ Packet runs entirely server-side using a built-in [Direwolf](https://github.com/
 
 Tune to a packet frequency in a voice mode (LSB/USB/FM/AM), open the **Packet** panel, pick the demodulator, and frames stream into the monitor as they decode. To open a connected QSO type the peer call, optional digipeater path, and press **Connect** — once `CONNECTED` shows you can send messages or push files via YAPP.
 
-The shared station callsign (gear dialog) is reused across CW, FT8/FT4, JS8, FreeDV reporter, APRS, and the AX.25 link, so you set it once and every mode uses it.
+The shared station callsign (gear dialog) is reused across CW, FT8/FT4, JS8, FreeDV reporter, APRS, the AX.25 link and the logbook, so you set it once and every mode uses it. On the Server build it is kept on the server, so every browser sees the same one.
 
 ---
 
@@ -251,6 +265,19 @@ JS8 brings JS8Call-style weak-signal messaging into the browser: a chat-style pa
 | **Waterfall** | Shared RX spectrogram with the JS8 decode region marked |
 
 Open the **JS8** panel, pick a submode, and decodes stream into the Heard list as they arrive. Type a callsign to open a QSO tab and start messaging. The shared station callsign (gear dialog) is used here too.
+
+---
+
+## Logbook and remote logging
+
+Every QSO logged from FT8/FT4, JS8, CW or by hand goes into one ADIF logbook.
+
+- **Server build:** the log is a file on the server (`logbook.adi` in wfweb's data directory — `~/.local/share/wfweb/wfweb/` on Linux, `/data/wfweb/wfweb/` in Docker; `--logbook <file>` puts it elsewhere), shared by every browser and sized for a lifetime log. The log panel's **Log management** menu downloads the QSOs not yet exported (plain ADIF, ready for LoTW, QRZ, Club Log…), downloads the full logbook, or imports an ADIF file with duplicates skipped. Each QSO carries your station callsign (`STATION_CALLSIGN`).
+- **Standalone:** the log is kept in the browser.
+- **Remote logging (server build):** `--remote-log <host[:port]>` sends every logged QSO to GridTracker, JTAlert, Log4OM or any other program that listens for the WSJT-X UDP protocol (port 2237 if omitted); add `--remote-log-decodes` to forward FT8/FT4 decodes as well. It is set on the server only — the command line or `[RemoteLog]` in the settings file — never from a browser.
+- **Worked-before hints:** FT8/FT4 decodes show the sender's DXCC entity, a gold star for an entity never worked, a silver star for one not yet worked on this band, and dim stations already worked on this band. Both can be switched off in Station Settings.
+
+The logbook is also reachable over REST (paged listing, ADIF import/export, station callsign) — see [REST_API.md](REST_API.md).
 
 ---
 
@@ -454,6 +481,9 @@ Password=
 | `SerialPortBaud` | `[Radio]` | Baud rate | `115200` |
 | `AudioOutput` | `[LAN]` | Local server audio output device (optional) | `hw:CARD=CODEC,DEV=0` |
 | `AudioInput` | `[LAN]` | Local server audio input device (optional) | `hw:CARD=CODEC,DEV=0` |
+| `Callsign` / `Grid` | `[Station]` | Station callsign and locator (also set from the web UI) | `K1ABC` / `FN42` |
+| `Logbook` | `[General]` | ADIF logbook path; relative paths resolve next to the settings file | `station.adi` |
+| `Enabled` / `Target` / `Decodes` | `[RemoteLog]` | Remote logging (see [Logbook](#logbook-and-remote-logging)) | `true` / `127.0.0.1:2237` / `false` |
 
 > Audio streams directly between the radio and the browser — no server-side audio configuration is needed for web operation.
 
