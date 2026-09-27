@@ -7647,7 +7647,8 @@ function scopeFreqFromClientX(target, clientX) {
     if (rect.width <= 0) return 0;
     var frac = (clientX - rect.left) / rect.width;
     frac = Math.max(0, Math.min(1, frac));
-    return Math.round((spectStartFreq + (spectEndFreq - spectStartFreq) * frac) * 1e6);
+    // Scope tuning lands on 100 Hz steps, like a drag (scopeFreqFromDragDeltaX).
+    return Math.round((spectStartFreq + (spectEndFreq - spectStartFreq) * frac) * 1e6 / 100) * 100;
 }
 
 function scopeSetVisualPan(px) {
@@ -7712,7 +7713,7 @@ function scopeDragTuneFreq(clientX, deltaX, release) {
     } else {
         frac = Math.max(0, Math.min(1, frac));
     }
-    var f = Math.round((spectStartFreq + (spectEndFreq - spectStartFreq) * frac) * 1e6);
+    var f = Math.round((spectStartFreq + (spectEndFreq - spectStartFreq) * frac) * 1e6 / 100) * 100;
     if (f > 0) scopeDragFreq = f;
     return f;
 }
