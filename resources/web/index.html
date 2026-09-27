@@ -3134,8 +3134,41 @@ var DIGI_BANDS = [
     { label: '15m',  ft8: 21074000, ft4: 21140000 },
     { label: '12m',  ft8: 24915000, ft4: 24919000 },
     { label: '10m',  ft8: 28074000, ft4: 28180000 },
-    { label: '6m',   ft8: 50313000, ft4: 50318000 }
+    { label: '6m',   ft8: 50313000, ft4: 50318000 },
+    // WSJT-X defaults above 6 m: FT8 on 70.154 (R1) and 144.174, FT4 on
+    // 144.170. 70 cm has no WSJT-X FT8 default; 432.174 is the channel in use.
+    // Bands without an FT4 channel tune FT4 to the FT8 dial.
+    { label: '4m',   ft8: 70154000 },
+    { label: '2m',   ft8: 144174000, ft4: 144170000 },
+    { label: '70cm', ft8: 432174000 }
 ];
+// The dial for a DIGI band in the current FT8/FT4 mode.
+function digiDialHz(band) {
+    return (digiMode === 'FT4' && band.ft4) ? band.ft4 : band.ft8;
+}
+// DIGI_BANDS the connected rig can tune — the same band table that drives
+// the BAND picker (populateBands), so an IC-705 gets 2m/70cm and an HF rig
+// doesn't.
+function rigDigiBands() {
+    return DIGI_BANDS.filter(function(b) { return bandLabelOf(b.ft8) !== null; });
+}
+function populateDigiBandSel() {
+    var bandSel = document.getElementById('digiBandSel');
+    if (!bandSel || !DIGI_BANDS) return;   // populateBands(null) runs before DIGI_BANDS exists
+    var keep = bandSel.value;
+    bandSel.innerHTML = '';
+    var opt0 = document.createElement('option');
+    opt0.value = ''; opt0.textContent = 'Band';
+    bandSel.appendChild(opt0);
+    rigDigiBands().forEach(function(b) {
+        var opt = document.createElement('option');
+        opt.value = b.label;
+        opt.textContent = b.label;
+        bandSel.appendChild(opt);
+    });
+    bandSel.value = keep;
+    if (bandSel.value !== keep) bandSel.value = '';
+}
 
 // ============================================================
 // TRANSPORT
@@ -4961,6 +4994,8 @@ function populateBands(bands) {
         rigBands.push({ label: k.label, freq: Math.min(Math.max(k.home, b.start), b.end) });
         BAND_RANGES[k.label] = [b.start, b.end];
     });
+    populateDigiBandSel();
+    if (window.js8PopulateBands) window.js8PopulateBands();
     if (currentPanel === 'band') renderBandOverlay();
 }
 
@@ -8736,10 +8771,11 @@ function initDigiTxCtx() {
 
 function getCurrentDigiBand() {
     if (!currentFreq) return null;
+    var bands = rigDigiBands();
     var best = null, bestDist = Infinity;
-    for (var i = 0; i < DIGI_BANDS.length; i++) {
-        var dist = Math.abs(currentFreq - DIGI_BANDS[i].ft8);
-        if (dist < bestDist) { bestDist = dist; best = DIGI_BANDS[i]; }
+    for (var i = 0; i < bands.length; i++) {
+        var dist = Math.abs(currentFreq - bands[i].ft8);
+        if (dist < bestDist) { bestDist = dist; best = bands[i]; }
     }
     return (bestDist < 500000) ? best : null;
 }
@@ -8805,8 +8841,7 @@ function toggleDigiBar() {
         var bandSel = document.getElementById('digiBandSel');
         if (band) {
             if (bandSel) bandSel.value = band.label;
-            var targetFreq = digiMode === 'FT4' ? band.ft4 : band.ft8;
-            send({ cmd: 'setFrequency', value: targetFreq });
+            send({ cmd: 'setFrequency', value: digiDialHz(band) });
         }
         digiRxEnabled = true;        // always start with RX on
         updateDigiRxToggle();
@@ -11431,21 +11466,12 @@ function initDigiHandlers() {
     // Populate band selector
     var bandSel = document.getElementById('digiBandSel');
     if (bandSel) {
-        var opt0 = document.createElement('option');
-        opt0.value = ''; opt0.textContent = 'Band';
-        bandSel.appendChild(opt0);
-        for (var b = 0; b < DIGI_BANDS.length; b++) {
-            var opt = document.createElement('option');
-            opt.value = DIGI_BANDS[b].label;
-            opt.textContent = DIGI_BANDS[b].label;
-            bandSel.appendChild(opt);
-        }
+        populateDigiBandSel();
         bandSel.addEventListener('change', function() {
             var sel = this.value;
             for (var bi = 0; bi < DIGI_BANDS.length; bi++) {
                 if (DIGI_BANDS[bi].label === sel) {
-                    var freq = digiMode === 'FT4' ? DIGI_BANDS[bi].ft4 : DIGI_BANDS[bi].ft8;
-                    send({ cmd: 'setFrequency', value: freq });
+                    send({ cmd: 'setFrequency', value: digiDialHz(DIGI_BANDS[bi]) });
                     wfLabels = [];
                     break;
                 }
@@ -11521,8 +11547,7 @@ function initDigiHandlers() {
                 startDigiPeriodTimer();
                 var band = getCurrentDigiBand();
                 if (band) {
-                    var targetFreq = digiMode === 'FT4' ? band.ft4 : band.ft8;
-                    send({ cmd: 'setFrequency', value: targetFreq });
+                    send({ cmd: 'setFrequency', value: digiDialHz(band) });
                 }
             }
         });
