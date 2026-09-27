@@ -140,7 +140,6 @@ macx:LIBS += -L/usr/local/lib -L/opt/local/lib -L/opt/homebrew/lib
 
 QMAKE_MACOSX_DEPLOYMENT_TARGET = 10.15
 QMAKE_TARGET_BUNDLE_PREFIX = org.wfweb
-QMAKE_INFO_PLIST = resources/Info.plist
 
 macx{
     rigFiles.files = rigs
