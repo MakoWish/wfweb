@@ -60,6 +60,10 @@ Station:
   STATION_CALLSIGN. (#109)
 
 FT8 / FT4:
+- Fox/Hound and MSHV multi-answer decodes now advance the correct QSO. A
+  combined message such as `K0DRE RR73; W2ERC <SQ5ANT> -06` is split into
+  its logical exchanges before click handling or automatic replies, rather
+  than being mistaken for traffic addressed only to the first station.
 - Each decode row shows the sender's DXCC entity (from AD1C's cty.dat).
   A gold star marks an entity never worked, a silver star one not yet
   worked on this band, and stations already worked on this band are

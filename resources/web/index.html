@@ -9455,15 +9455,54 @@ function escapeHtml(s) {
     return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
 
+// Return the logical FT8 exchange relevant to this station.  Fox/Hound and
+// MSHV multi-answer messages can combine two exchanges, for example
+// "K0DRE RR73; W2ERC <SQ5ANT> -06".  The two-token completion uses the
+// bracketed sender from the other clause (or the active QSO partner).
+function digiQsoMessageParts(msg, myCall, partner) {
+    var raw = (msg || '').trim().toUpperCase();
+    var clauses = raw.split(/\s*;\s*/).filter(function(s) { return !!s; });
+    var cleanCall = function(s) { return (s || '').replace(/^<|>$/g, ''); };
+    var sharedSender = '';
+    for (var i = 0; i < clauses.length; i++) {
+        var probe = clauses[i].split(/\s+/);
+        if (probe.length >= 3 && /^<[^>]+>$/.test(probe[1])) {
+            sharedSender = cleanCall(probe[1]);
+            break;
+        }
+    }
+
+    var parsed = clauses.map(function(clause) {
+        var p = clause.split(/\s+/);
+        if (p.length === 2 && /^(?:RR73|RRR|73)$/.test(p[1])) {
+            return [cleanCall(p[0]), cleanCall(partner) || sharedSender, p[1]];
+        }
+        if (p.length >= 2) {
+            p[0] = cleanCall(p[0]);
+            p[1] = cleanCall(p[1]);
+        }
+        return p;
+    });
+    var mine = cleanCall(myCall).toUpperCase();
+    var dx = cleanCall(partner).toUpperCase();
+    for (var j = 0; j < parsed.length; j++) {
+        if (mine && parsed[j][0] === mine && (!dx || parsed[j][1] === dx)) return parsed[j];
+    }
+    for (var k = 0; k < parsed.length; k++) {
+        if (mine && parsed[k][0] === mine) return parsed[k];
+    }
+    return parsed[0] || [];
+}
+
 function digiRowClick(el, ev) {
     if (!checkDigiCallGrid()) return;
     var msg = decodeURIComponent(el.getAttribute('data-msg') || '');
     var slotIndex = parseInt(el.getAttribute('data-slot') || '-1', 10);
     var freq = parseInt(el.getAttribute('data-freq') || '0', 10);
     var snr = parseFloat(el.getAttribute('data-snr') || '0');
-    var parts = msg.trim().split(/\s+/);
-    var dxEl = document.getElementById('digiDxCall');
     var myCall = getMyCall();
+    var parts = digiQsoMessageParts(msg, myCall, digiQsoPartner);
+    var dxEl = document.getElementById('digiDxCall');
     // Ignore clicks on our own transmissions (FROM = parts[1])
     var fromCall = /^CQ$/i.test(parts[0]) ? (parts.length >= 3 ? parts[parts.length - 2] : parts[1]) : parts[1];
     if (myCall && fromCall && fromCall.toUpperCase() === myCall.toUpperCase()) return;
@@ -9974,7 +10013,7 @@ function handleDigiAutoQso(decodes, decodedSlotIndex) {
 
     for (var i = 0; i < decodes.length; i++) {
         var msg = decodes[i].msg.trim().toUpperCase();
-        var parts = msg.split(/\s+/);
+        var parts = digiQsoMessageParts(msg, myCall, digiQsoPartner);
         // Each decode's slot index (prefer per-decode if present, fall back to argument)
         var dSlot = (decodes[i].slotIndex !== undefined) ? decodes[i].slotIndex : decodedSlotIndex;
 
