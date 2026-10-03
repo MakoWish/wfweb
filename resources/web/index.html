@@ -8643,7 +8643,7 @@ function updatePskReporterStatus(msg) {
 // messages, so callsign + (optional) grid extraction lives here.
 function reportDigiSpot(d) {
     if (!ws || ws.readyState !== 1) return;
-    var parts = (d.msg || '').trim().split(/\s+/);
+    var parts = digiSplitMulti(d.msg || '')[0].trim().split(/\s+/);
     if (parts.length < 2) return;
     var first = parts[0].toUpperCase();
     var fromCall = null, grid = '';
@@ -9217,10 +9217,30 @@ function digiWorkedAdd(call, band) {
     if (e) (digiWorked.ents[e.name] = digiWorked.ents[e.name] || {})[band] = 1;
 }
 
+// A DXpedition / multi-answer decode ("K1ABC RR73; W9XYZ <KH1/KH7Z> -08") is
+// one station sending two messages in a single transmission (#129). Returns
+// them in the usual "TO FROM DATA" form; anything else comes back as it is.
+function digiSplitMulti(msg) {
+    var m = /^(\S+)\s+RR73;\s+(\S+)\s+<(\S+)>\s+(\S+)$/i.exec((msg || '').trim());
+    if (!m) return [msg];
+    return [m[1] + ' ' + m[3] + ' RR73', m[2] + ' ' + m[3] + ' ' + m[4]];
+}
+
+// The form of a decode the QSO logic should read: for a multi-answer, the
+// half addressed to myCall when there is one, else the first.
+function digiStdMsg(msg, myCall) {
+    var halves = digiSplitMulti(msg);
+    var me = (myCall || '').toUpperCase();
+    for (var i = 0; me && i < halves.length; i++) {
+        if (halves[i].toUpperCase().indexOf(me + ' ') === 0) return halves[i];
+    }
+    return halves[0];
+}
+
 // The sender of a decoded FT8/FT4 message ("CQ [mod] CALL GRID", "A B rpt"),
 // or '' when the message has none we can trust (free text, telemetry).
 function digiSenderCall(msg) {
-    var parts = (msg || '').trim().toUpperCase().split(/\s+/);
+    var parts = digiSplitMulti(msg || '')[0].trim().toUpperCase().split(/\s+/);
     var tok = '';
     if (parts[0] === 'CQ' || parts[0] === 'QRZ' || parts[0] === 'DE') {
         // Skip modifiers without digits (DX, POTA, FD...) and grids (FN42).
@@ -9319,7 +9339,7 @@ function renderDigiDecodes() {
             html += '<div class="digi-slot-divider"><span class="digi-slot-time">' + escapeHtml(d.time) + '</span></div>';
         }
         lastSlotIndex = d.slotIndex;
-        var rparts = d.msg.trim().split(/\s+/);
+        var rparts = digiStdMsg(d.msg, myCall).trim().split(/\s+/);
         var isDirected = myCall && rparts.length >= 2 && rparts[0].toUpperCase() === myCall.toUpperCase();
         var isMentioned = !isDirected && myCall && d.msg.toUpperCase().indexOf(myCall) >= 0;
         var hints = digiDecodeHints(d.msg);
@@ -9395,7 +9415,7 @@ function appendDigiDirectedRow(d, isTx) {
     // Match the All Decodes panel: amber for messages addressed to us, blue for
     // other relevant (on-frequency) traffic, green for our own TX.
     var dMyCall = getMyCall();
-    var dParts = (d.msg || '').trim().toUpperCase().split(/\s+/);
+    var dParts = digiStdMsg(d.msg || '', dMyCall).trim().toUpperCase().split(/\s+/);
     var dDirected = !isTx && dMyCall && dParts.length >= 2 && dParts[0] === dMyCall.toUpperCase();
     var dHints = isTx ? { star: '', ent: null, worked: false } : digiDecodeHints(d.msg);
     var rowCls = 'digi-decode-row ' + (isTx ? 'tx-row' : (dDirected ? 'directed' : 'highlight')) + (dHints.worked ? ' worked' : '');
@@ -9422,7 +9442,7 @@ function escapeHtml(s) {
 
 function digiRowClick(el, ev) {
     if (!checkDigiCallGrid()) return;
-    var msg = decodeURIComponent(el.getAttribute('data-msg') || '');
+    var msg = digiStdMsg(decodeURIComponent(el.getAttribute('data-msg') || ''), getMyCall());
     var slotIndex = parseInt(el.getAttribute('data-slot') || '-1', 10);
     var freq = parseInt(el.getAttribute('data-freq') || '0', 10);
     var snr = parseFloat(el.getAttribute('data-snr') || '0');
@@ -9938,7 +9958,9 @@ function handleDigiAutoQso(decodes, decodedSlotIndex) {
     if (!myCall || !myGrid) return;
 
     for (var i = 0; i < decodes.length; i++) {
-        var msg = decodes[i].msg.trim().toUpperCase();
+        // Multi-answer decode (#129): read the half addressed to us.
+        var multi = digiSplitMulti(decodes[i].msg).length > 1;
+        var msg = digiStdMsg(decodes[i].msg, myCall).trim().toUpperCase();
         var parts = msg.split(/\s+/);
         // Each decode's slot index (prefer per-decode if present, fall back to argument)
         var dSlot = (decodes[i].slotIndex !== undefined) ? decodes[i].slotIndex : decodedSlotIndex;
@@ -9980,10 +10002,11 @@ function handleDigiAutoQso(decodes, decodedSlotIndex) {
                 digiQsoState = 'EXCHANGE';
                 break;
             } else if (parts.length >= 2 && parts[1] === digiQsoPartner && parts[0] !== myCall && parts[0] !== 'CQ' &&
-                       parts[0] !== digiQsoPartnerBusyWith) {
+                       parts[0] !== digiQsoPartnerBusyWith && !multi) {
                 // DX station (parts[1] = FROM) sent to someone who is not us (parts[0] = TO ≠ myCall).
                 // Traffic to the station they were already working when we clicked is not a
-                // new QSO — keep calling until they answer someone else or us.
+                // new QSO — keep calling until they answer someone else or us. A multi-answer
+                // station works several callers at once, so that is no reason to stop either.
                 console.log('[DIGI QSO] CALLING→IDLE: ' + digiQsoPartner + ' replied to ' + parts[0] + ', not us — disabling TX');
                 digiReArmPending = false;
                 digiTxArmed = false;
